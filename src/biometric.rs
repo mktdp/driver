@@ -8,8 +8,18 @@ use crate::error::{FpError, Result};
 use crate::image;
 use crate::usb::{IMAGE_HEIGHT, IMAGE_WIDTH};
 
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        if cfg!(feature = "debug-logging") {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 /// DPI of the U.are.U 4500 sensor.
 const SENSOR_DPI: u32 = 500;
+/// ISO/IEC 19794-2:2005 fixed template header size in bytes.
+const ISO_TEMPLATE_HEADER_LEN: usize = 26;
 
 /// Extract a biometric template from a deframed grayscale image.
 ///
@@ -37,32 +47,29 @@ pub fn extract(grayscale: &[u8]) -> Result<Vec<u8>> {
     let png_bytes = image::encode_png(grayscale, IMAGE_WIDTH as u32, IMAGE_HEIGHT as u32)?;
 
     let settings = NbisExtractorSettings {
-        min_quality: 0.0,       // keep all minutiae
-        get_center: false,      // skip ROI computation
+        min_quality: 0.0,         // keep all minutiae
+        get_center: false,        // skip ROI computation
         check_fingerprint: false, // skip SIVV check
-        compute_nfiq2: false,   // skip quality scoring for speed
+        compute_nfiq2: false,     // skip quality scoring for speed
         ppi: Some(SENSOR_DPI as f64),
     };
 
-    let extractor = NbisExtractor::new(settings).map_err(|e| {
-        FpError::ExtractFail(format!("failed to create extractor: {}", e))
-    })?;
+    let extractor = NbisExtractor::new(settings)
+        .map_err(|e| FpError::ExtractFail(format!("failed to create extractor: {}", e)))?;
 
-    let minutiae = extractor.extract_minutiae(&png_bytes).map_err(|e| {
-        FpError::ExtractFail(format!("minutiae extraction failed: {}", e))
-    })?;
-
-    eprintln!(
-        "[extract] minutiae count: {}",
-        (minutiae.to_iso_19794_2_2005().len().saturating_sub(26)) / 6
-    );
+    let minutiae = extractor
+        .extract_minutiae(&png_bytes)
+        .map_err(|e| FpError::ExtractFail(format!("minutiae extraction failed: {}", e)))?;
 
     // Serialise to ISO 19794-2:2005 format.
     let template = minutiae.to_iso_19794_2_2005();
+    let minutiae_count = template.len().saturating_sub(ISO_TEMPLATE_HEADER_LEN) / 6;
 
-    if template.is_empty() {
+    debug_log!("[extract] minutiae count: {}", minutiae_count);
+
+    if template.is_empty() || minutiae_count == 0 {
         return Err(FpError::ExtractFail(
-            "extracted template is empty — no minutiae found".into(),
+            "extracted template has no minutiae".into(),
         ));
     }
 
@@ -94,20 +101,19 @@ pub fn verify(tmpl_a: &[u8], tmpl_b: &[u8]) -> Result<f64> {
         ppi: Some(SENSOR_DPI as f64),
     };
 
-    let extractor = NbisExtractor::new(settings).map_err(|e| {
-        FpError::ExtractFail(format!("failed to create extractor: {}", e))
-    })?;
+    let extractor = NbisExtractor::new(settings)
+        .map_err(|e| FpError::ExtractFail(format!("failed to create extractor: {}", e)))?;
 
-    let m_a = extractor.load_iso_19794_2_2005(tmpl_a).map_err(|e| {
-        FpError::ExtractFail(format!("failed to load template A: {}", e))
-    })?;
+    let m_a = extractor
+        .load_iso_19794_2_2005(tmpl_a)
+        .map_err(|e| FpError::ExtractFail(format!("failed to load template A: {}", e)))?;
 
-    let m_b = extractor.load_iso_19794_2_2005(tmpl_b).map_err(|e| {
-        FpError::ExtractFail(format!("failed to load template B: {}", e))
-    })?;
+    let m_b = extractor
+        .load_iso_19794_2_2005(tmpl_b)
+        .map_err(|e| FpError::ExtractFail(format!("failed to load template B: {}", e)))?;
 
     let raw_score = m_a.compare(&m_b);
-    eprintln!("[verify] raw BOZORTH3 score: {}", raw_score);
+    debug_log!("[verify] raw BOZORTH3 score: {}", raw_score);
 
     // Normalise: Bozorth3 returns an integer.  Scores above ~40 are
     // considered same-finger; scores can go into the hundreds.

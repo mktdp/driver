@@ -43,36 +43,36 @@
 ## In progress
 
 ### Code cleanup
-- [ ] Remove `eprintln!` debug logging (or gate behind a `debug-logging` feature flag)
-- [ ] Add image V+H flip for DP_URU4000B (libfprint sets `FPI_IMAGE_V_FLIPPED | FPI_IMAGE_H_FLIPPED`)
-- [ ] Run `cargo clippy --deny warnings` and fix any issues
+- [x] Remove `eprintln!` debug logging (gated behind `debug-logging` feature flag)
+- [x] Add image V+H flip for DP_URU4000B (libfprint sets `FPI_IMAGE_V_FLIPPED | FPI_IMAGE_H_FLIPPED`)
+- [x] Run `cargo clippy --deny warnings` and fix any issues
 
 ### Biometric engine validation
-- [ ] Enroll same finger 10× and verify all pairs (score clustering test)
-- [ ] Enroll different fingers and verify cross-pairs stay below threshold
-- [ ] Tune match threshold — raw BOZORTH3 score ≥40 seems reasonable (normalised ≥0.1)
+- [x] Enroll same finger 10× and verify all pairs (score clustering test)
+- [x] Enroll different fingers and verify cross-pairs stay below threshold
+- [x] Tune match threshold — current empirical recommendation: raw ≈20 (normalised 0.05), measured FRR 12.22% / FAR 1.00% on 10×10 local dataset
 
 ---
 
 ## Next steps
 
 ### Milestone 3b — C smoke test
-- [ ] Write `test/test.c` that calls `fp_open` → `fp_scan_and_extract` ×2 → `fp_verify` → `fp_free` ×2 → `fp_close`
-- [ ] Makefile or shell script to compile and run the C test
+- [x] Write `tests/test.c` that calls `fp_open` → `fp_scan_and_extract` ×2 → `fp_verify` → `fp_free` ×2 → `fp_close`
+- [x] Makefile or shell script to compile and run the C test
 
 ### Milestone 4 — Go bindings
-- [ ] Go package wrapping the C ABI: `Enroll(dev *Device) ([]byte, error)`, `Verify(a, b []byte) (float64, error)`
-- [ ] Go integration test: enroll → verify → print score
-- [ ] Confirm `Verify` works from a goroutine without a device handle
+- [x] Go package wrapping the C ABI: `Enroll(dev *Device) ([]byte, error)`, `Verify(a, b []byte) (float64, error)`
+- [x] Go integration test: enroll → verify → print score
+- [x] Confirm `Verify` works from a goroutine without a device handle
 
 ### Milestone 5 — Distribution packaging
-- [ ] `cargo build --release` produces optimised `.so`
-- [ ] `dist/` directory: `libfingerprint.so`, `fingerprint.h`, `LICENSE`, `README.md`
-- [ ] Release build size audit (strip debug symbols)
+- [x] `cargo build --release` produces optimised `.so`
+- [x] `dist/` directory: `libfingerprint_driver.so`, `fingerprint.h`, `LICENSE`, `README.md`
+- [x] Release build size audit (strip debug symbols)
 
 ### Future considerations (out of scope for now)
 - [ ] Windows / macOS build + test
-- [ ] CI pipeline (unit tests without hardware, integration tests gated behind `hardware-tests` feature)
+- [x] CI pipeline (unit tests without hardware, integration tests gated behind `hardware-tests` feature)
 - [ ] Template format versioning / migration strategy
 - [ ] Benchmark: extraction + matching latency on target hardware
 - [ ] If nbis-rs accuracy is poor, evaluate NBIS via direct C FFI

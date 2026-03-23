@@ -13,10 +13,19 @@
 //!   6. Compare both templates and print the score
 //!   7. Clean up
 
+use std::path::Path;
+
 use fingerprint_driver::{biometric, image, usb};
+
+const DEFAULT_MATCH_THRESHOLD: f64 = 0.06;
 
 fn main() {
     println!("=== Fingerprint Driver — Hardware Smoke Test ===\n");
+    let threshold = match_threshold_from_env();
+    println!(
+        "Match threshold: {:.4} (set FP_MATCH_THRESHOLD to override)\n",
+        threshold
+    );
 
     // ── Step 1: Open device ────────────────────────────────────────
     println!("[1/6] Opening scanner...");
@@ -69,10 +78,10 @@ fn main() {
     match biometric::verify(&tmpl_a, &tmpl_b) {
         Ok(score) => {
             println!("  ✓ Similarity score: {:.4} (range 0.0–1.0)\n", score);
-            if score > 0.1 {
-                println!("  → MATCH (score > 0.1 threshold)");
+            if score >= threshold {
+                println!("  → MATCH (score >= {:.4} threshold)", threshold);
             } else {
-                println!("  → NO MATCH (score ≤ 0.1 threshold)");
+                println!("  → NO MATCH (score < {:.4} threshold)", threshold);
                 println!("    This might mean the two scans were different fingers,");
                 println!("    or the finger placement was too different between scans.");
             }
@@ -94,11 +103,8 @@ fn main() {
 }
 
 /// Capture a raw frame, deframe it, and extract a biometric template.
-/// `label` is used to name the debug PNG saved to /tmp.
-fn scan_and_extract(
-    dev: &mut usb::FpDevice,
-    label: &str,
-) -> std::result::Result<Vec<u8>, String> {
+/// `label` is used to name the debug PNG saved to ./storage.
+fn scan_and_extract(dev: &mut usb::FpDevice, label: &str) -> std::result::Result<Vec<u8>, String> {
     // 10 second timeout for finger placement
     let raw_frame = usb::scan(dev, 10_000).map_err(|e| format!("scan: {}", e))?;
     println!("  · Raw frame: {} bytes", raw_frame.len());
@@ -111,20 +117,39 @@ fn scan_and_extract(
         usb::IMAGE_HEIGHT
     );
 
-    // Save debug PNG to /tmp for visual inspection.
-    let png_path = format!("/tmp/fp_debug_{}.png", label);
-    match image::encode_png(&grayscale, usb::IMAGE_WIDTH as u32, usb::IMAGE_HEIGHT as u32) {
+    // Save debug PNG to ./storage for visual inspection.
+    let storage_dir = Path::new("storage");
+    if let Err(e) = std::fs::create_dir_all(storage_dir) {
+        eprintln!("  (could not create storage directory: {})", e);
+    }
+    let png_path = storage_dir.join(format!("fp_debug_{}.png", label));
+    match image::encode_png(
+        &grayscale,
+        usb::IMAGE_WIDTH as u32,
+        usb::IMAGE_HEIGHT as u32,
+    ) {
         Ok(png_bytes) => {
             if let Err(e) = std::fs::write(&png_path, &png_bytes) {
                 eprintln!("  (could not save debug image: {})", e);
             } else {
-                println!("  · Debug image saved: {}", png_path);
+                println!("  · Debug image saved: {}", png_path.display());
             }
         }
         Err(e) => eprintln!("  (could not encode debug PNG: {})", e),
     }
 
-    let template =
-        biometric::extract(&grayscale).map_err(|e| format!("extract: {}", e))?;
+    let template = biometric::extract(&grayscale).map_err(|e| format!("extract: {}", e))?;
     Ok(template)
+}
+
+fn match_threshold_from_env() -> f64 {
+    match std::env::var("FP_MATCH_THRESHOLD") {
+        Ok(v) => v
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|t| (0.0..=1.0).contains(t))
+            .unwrap_or(DEFAULT_MATCH_THRESHOLD),
+        Err(_) => DEFAULT_MATCH_THRESHOLD,
+    }
 }

@@ -107,6 +107,89 @@ gcc -o test_fp test.c -I include -L target/release -lfingerprint_driver -Wl,-rpa
 
 ---
 
+## Go bindings (Milestone 4)
+
+A cgo wrapper is available at `go/fingerprint` with:
+
+- `Open() (*Device, error)`
+- `Enroll(dev *Device) ([]byte, error)`
+- `Verify(a, b []byte) (float64, error)`
+- `MatchThreshold() float64` (default `0.06`, override via `FP_MATCH_THRESHOLD`)
+- `IsMatch(score float64) bool`
+
+Run non-hardware tests:
+
+```bash
+cd go/fingerprint
+GOCACHE=/tmp/go-build go test ./...
+```
+
+Run hardware integration tests (real scanner required):
+
+```bash
+./scripts/run_go_hardware_test.sh
+```
+
+---
+
+## Distribution packaging
+
+Build and assemble a release bundle:
+
+```bash
+./scripts/package_dist.sh
+```
+
+This creates `dist/` with:
+
+- `libfingerprint_driver.so` (Linux; platform-specific extension on macOS/Windows)
+- `include/fingerprint.h`
+- `README.md`
+- `LICENSE`
+
+---
+
+## CI (non-hardware)
+
+Run the same checks as CI locally:
+
+```bash
+./scripts/ci_check.sh
+```
+
+This runs formatting, clippy (`-D warnings`), Rust tests, example compile checks,
+C smoke-test compile check, and Go non-hardware tests.
+
+---
+
+## Biometric validation
+
+Run interactive score clustering/threshold validation (same finger vs different finger):
+
+```bash
+./scripts/run_biometric_validation.sh
+```
+
+Optional overrides:
+
+```bash
+./scripts/run_biometric_validation.sh --same 10 --diff 10 --timeout 10000
+```
+
+Capture timing tuning (optional):
+
+```bash
+FP_FINGER_DEBOUNCE_MS=220 FP_CAPTURE_SETTLE_MS=0 FP_CAPTURE_HOLD_MS=0 ./scripts/run_biometric_validation.sh --same 10 --diff 10 --timeout 10000
+```
+
+Env vars:
+- `FP_MATCH_THRESHOLD`: app-level match threshold (default `0.06`)
+- `FP_FINGER_DEBOUNCE_MS`: require stable finger contact for this duration before capture (default `180`)
+- `FP_CAPTURE_SETTLE_MS`: extra wait after stable contact before entering capture mode (default `0`)
+- `FP_CAPTURE_HOLD_MS`: wait in capture mode before bulk read (default `0`; increase only if needed)
+
+---
+
 ## Memory contract
 
 | Function              | Allocates?            | Caller must…                                     |
@@ -147,7 +230,14 @@ Use `fp_strerror(code)` to get a human-readable string.
 ├── include/
 │   └── fingerprint.h    # auto-generated C header
 ├── scripts/
-│   └── setup.sh         # system dependency installer
+│   ├── setup.sh         # system dependency installer
+│   ├── run_c_smoke.sh
+│   ├── run_go_hardware_test.sh
+│   ├── package_dist.sh
+│   ├── ci_check.sh
+│   └── run_biometric_validation.sh
+├── go/
+│   └── fingerprint/     # Go cgo bindings + tests
 └── src/
     ├── lib.rs           # extern "C" API surface
     ├── usb.rs           # USB device open/init/capture/close

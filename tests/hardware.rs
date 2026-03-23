@@ -9,6 +9,7 @@
 //! IMPORTANT: --test-threads=1 because only one test can own the USB
 //! device at a time.
 
+#[cfg(feature = "hardware-tests")]
 use fingerprint_driver::{biometric, image, usb};
 
 /// Test that we can open and close the device without panicking.
@@ -50,11 +51,9 @@ fn hw_capture_raw_frame() {
 fn hw_extract_template() {
     let mut dev = usb::open().expect("failed to open scanner");
 
-    let raw_frame = usb::scan(&mut dev, 15_000)
-        .expect("scan failed — did you place your finger?");
+    let raw_frame = usb::scan(&mut dev, 15_000).expect("scan failed — did you place your finger?");
 
-    let grayscale = image::deframe(&raw_frame)
-        .expect("deframe failed");
+    let grayscale = image::deframe(&raw_frame).expect("deframe failed");
 
     assert_eq!(
         grayscale.len(),
@@ -62,8 +61,7 @@ fn hw_extract_template() {
         "unexpected image dimensions"
     );
 
-    let template = biometric::extract(&grayscale)
-        .expect("template extraction failed");
+    let template = biometric::extract(&grayscale).expect("template extraction failed");
 
     assert!(
         !template.is_empty(),
@@ -99,8 +97,7 @@ fn hw_same_finger_match() {
     let tmpl_b = capture_template(&mut dev);
     println!("  Template B: {} bytes", tmpl_b.len());
 
-    let score = biometric::verify(&tmpl_a, &tmpl_b)
-        .expect("verification failed");
+    let score = biometric::verify(&tmpl_a, &tmpl_b).expect("verification failed");
 
     println!("  Similarity score: {:.4}", score);
     assert!(

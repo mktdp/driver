@@ -1,1 +1,4 @@
 /target
+/storage
+/dist
+/go/fingerprint/*.test

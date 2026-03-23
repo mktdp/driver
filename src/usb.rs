@@ -11,6 +11,14 @@ use std::time::{Duration, Instant};
 
 use crate::error::{FpError, Result};
 
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        if cfg!(feature = "debug-logging") {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 // ── USB identifiers ────────────────────────────────────────────────
 
 /// Vendor ID for DigitalPersona / ZKSoftware devices.
@@ -80,6 +88,27 @@ pub const IMAGE_HEIGHT: usize = 289;
 /// Expected pixel count for a valid, deframed image.
 pub const IMAGE_SIZE: usize = IMAGE_WIDTH * IMAGE_HEIGHT;
 
+/// Default stable-contact window after first finger-on IRQ.
+///
+/// Capture starts only after this window passes without a finger-off IRQ.
+const DEFAULT_FINGER_DEBOUNCE_MS: u64 = 0;
+/// Default wait after finger-on before entering capture mode.
+///
+/// This lets pressure/contact settle so we do not capture too early.
+const DEFAULT_CAPTURE_SETTLE_MS: u64 = 0;
+/// Default wait after entering capture mode before bulk read.
+///
+/// Keep this at 0 by default to avoid visible LED flicker on some units.
+const DEFAULT_CAPTURE_HOLD_MS: u64 = 0;
+/// Hard clamp for env-configured delays to avoid pathological values.
+const MAX_CAPTURE_DELAY_MS: u64 = 2_000;
+/// Env var: stable-contact debounce window after finger-on.
+const ENV_FINGER_DEBOUNCE_MS: &str = "FP_FINGER_DEBOUNCE_MS";
+/// Env var: settle delay after finger-on, before MODE_CAPTURE.
+const ENV_CAPTURE_SETTLE_MS: &str = "FP_CAPTURE_SETTLE_MS";
+/// Env var: hold delay after MODE_CAPTURE, before bulk read.
+const ENV_CAPTURE_HOLD_MS: &str = "FP_CAPTURE_HOLD_MS";
+
 /// Length of the `uru4k_image` header in bytes.
 ///
 /// Layout (from libfprint):
@@ -121,22 +150,17 @@ pub struct FpDevice {
 /// (class = subclass = protocol = 0xFF), claims it, detaches any
 /// kernel driver if necessary, and runs the init state-machine.
 pub fn open() -> Result<FpDevice> {
-    let handle = rusb::open_device_with_vid_pid(VID, PID)
-        .ok_or(FpError::DeviceNotFound)?;
+    let handle = rusb::open_device_with_vid_pid(VID, PID).ok_or(FpError::DeviceNotFound)?;
 
     let device = handle.device();
-    let config = device
-        .active_config_descriptor()
-        .map_err(FpError::UsbIo)?;
+    let config = device.active_config_descriptor().map_err(FpError::UsbIo)?;
 
     // Find the vendor-specific interface (class=subclass=protocol=0xFF).
     let iface = config
         .interfaces()
         .find(|i| {
             i.descriptors().any(|d| {
-                d.class_code() == 0xFF
-                    && d.sub_class_code() == 0xFF
-                    && d.protocol_code() == 0xFF
+                d.class_code() == 0xFF && d.sub_class_code() == 0xFF && d.protocol_code() == 0xFF
             })
         })
         .ok_or(FpError::DeviceNotFound)?;
@@ -150,9 +174,7 @@ pub fn open() -> Result<FpDevice> {
             .map_err(FpError::UsbIo)?;
     }
 
-    handle
-        .claim_interface(iface_num)
-        .map_err(FpError::UsbIo)?;
+    handle.claim_interface(iface_num).map_err(FpError::UsbIo)?;
 
     let mut dev = FpDevice {
         handle,
@@ -174,12 +196,20 @@ pub fn open() -> Result<FpDevice> {
 /// The returned `Vec<u8>` contains `IMAGE_WIDTH × IMAGE_HEIGHT`
 /// bytes of 8-bit grayscale, already deframed and descrambled.
 pub fn scan(dev: &mut FpDevice, timeout_ms: u32) -> Result<Vec<u8>> {
-    eprintln!("[usb::scan] === START (timeout={}ms) ===", timeout_ms);
+    debug_log!("[usb::scan] === START (timeout={}ms) ===", timeout_ms);
+    let timing = capture_timing();
 
     // 1. Wait for finger presence.
-    eprintln!("[usb::scan] step 1: waiting for finger...");
-    wait_for_finger(dev, timeout_ms)?;
-    eprintln!("[usb::scan] step 1: finger detected!");
+    debug_log!("[usb::scan] step 1: waiting for finger...");
+    wait_for_stable_finger_on(dev, timeout_ms, timing.finger_debounce_ms)?;
+    debug_log!("[usb::scan] step 1: finger detected!");
+    if timing.settle_ms > 0 {
+        debug_log!(
+            "[usb::scan] step 1b: settle delay {}ms before capture",
+            timing.settle_ms
+        );
+        std::thread::sleep(Duration::from_millis(timing.settle_ms));
+    }
 
     // 2. Set capture mode and read image with retry.
     //    The device sometimes sends a ZLP (zero-length packet) on
@@ -187,11 +217,18 @@ pub fn scan(dev: &mut FpDevice, timeout_ms: u32) -> Result<Vec<u8>> {
     //    subsequent captures.  libfprint handles this by retrying
     //    the bulk read (IMAGING_CAPTURE loop) without re-writing
     //    the mode register.  We do the same.
-    eprintln!("[usb::scan] step 2: setting MODE_CAPTURE...");
+    debug_log!("[usb::scan] step 2: setting MODE_CAPTURE...");
     write_reg(dev, REG_MODE, MODE_CAPTURE)?;
+    if timing.hold_ms > 0 {
+        debug_log!(
+            "[usb::scan] step 2a: capture hold {}ms before bulk read",
+            timing.hold_ms
+        );
+        std::thread::sleep(Duration::from_millis(timing.hold_ms));
+    }
 
     let mut raw = bulk_read_image_with_retry(dev)?;
-    eprintln!("[usb::scan] step 2: got {} bytes", raw.len());
+    debug_log!("[usb::scan] step 2: got {} bytes", raw.len());
 
     // 2b. Decrypt the image if it is encrypted.
     //     The device may encrypt pixel data with an LFSR stream cipher.
@@ -203,13 +240,16 @@ pub fn scan(dev: &mut FpDevice, timeout_ms: u32) -> Result<Vec<u8>> {
     //    This matches the libfprint state machine:
     //    CAPTURE → AWAIT_FINGER_OFF → (return) → AWAIT_FINGER_ON → CAPTURE
     //    We do NOT set MODE_INIT between captures — that confuses the device.
-    eprintln!("[usb::scan] step 3: waiting for finger OFF...");
+    debug_log!("[usb::scan] step 3: waiting for finger OFF...");
     match wait_for_finger_off(dev, 5_000) {
-        Ok(()) => eprintln!("[usb::scan] step 3: finger lifted OK"),
-        Err(e) => eprintln!("[usb::scan] step 3: finger-off wait failed: {} (continuing anyway)", e),
+        Ok(()) => debug_log!("[usb::scan] step 3: finger lifted OK"),
+        Err(e) => debug_log!(
+            "[usb::scan] step 3: finger-off wait failed: {} (continuing anyway)",
+            e
+        ),
     }
 
-    eprintln!("[usb::scan] === DONE ({} bytes) ===", raw.len());
+    debug_log!("[usb::scan] === DONE ({} bytes) ===", raw.len());
 
     Ok(raw)
 }
@@ -238,8 +278,8 @@ fn write_reg_inner(
     handle.write_control(
         CTRL_OUT,
         USB_RQ,
-        reg,   // wValue = register address
-        0,     // wIndex = 0
+        reg, // wValue = register address
+        0,   // wIndex = 0
         &[value],
         CTRL_TIMEOUT,
     )?;
@@ -265,13 +305,126 @@ fn read_reg(dev: &FpDevice, reg: u16, len: u16) -> Result<Vec<u8>> {
     let n = dev.handle.read_control(
         CTRL_IN,
         USB_RQ,
-        reg,   // wValue = register address
-        0,     // wIndex = 0
+        reg, // wValue = register address
+        0,   // wIndex = 0
         &mut buf,
         CTRL_TIMEOUT,
     )?;
     buf.truncate(n);
     Ok(buf)
+}
+
+/// Capture timing knobs loaded from environment.
+///
+/// - `FP_CAPTURE_SETTLE_MS`: delay after finger-on before MODE_CAPTURE
+/// - `FP_CAPTURE_HOLD_MS`: delay after MODE_CAPTURE before bulk read
+struct CaptureTiming {
+    finger_debounce_ms: u64,
+    settle_ms: u64,
+    hold_ms: u64,
+}
+
+fn capture_timing() -> CaptureTiming {
+    CaptureTiming {
+        finger_debounce_ms: env_delay_ms(ENV_FINGER_DEBOUNCE_MS, DEFAULT_FINGER_DEBOUNCE_MS),
+        settle_ms: env_delay_ms(ENV_CAPTURE_SETTLE_MS, DEFAULT_CAPTURE_SETTLE_MS),
+        hold_ms: env_delay_ms(ENV_CAPTURE_HOLD_MS, DEFAULT_CAPTURE_HOLD_MS),
+    }
+}
+
+fn env_delay_ms(name: &str, default_ms: u64) -> u64 {
+    match std::env::var(name) {
+        Ok(value) => value
+            .trim()
+            .parse::<u64>()
+            .map(|ms| ms.min(MAX_CAPTURE_DELAY_MS))
+            .unwrap_or(default_ms),
+        Err(_) => default_ms,
+    }
+}
+
+fn duration_to_timeout_ms(duration: Duration) -> u32 {
+    duration.as_millis().min(u128::from(u32::MAX)) as u32
+}
+
+/// Wait for a finger-on event that remains stable for `debounce_ms`.
+///
+/// A stable touch means no `FINGER_OFF` IRQ arrives during the debounce window.
+fn wait_for_stable_finger_on(dev: &FpDevice, timeout_ms: u32, debounce_ms: u64) -> Result<()> {
+    if debounce_ms == 0 {
+        return wait_for_finger(dev, timeout_ms);
+    }
+
+    let timeout = if timeout_ms == 0 {
+        u32::MAX
+    } else {
+        timeout_ms
+    };
+    let deadline = Instant::now() + Duration::from_millis(timeout as u64);
+
+    loop {
+        let remaining_total = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or(Duration::ZERO);
+        if remaining_total.is_zero() {
+            return Err(FpError::Timeout);
+        }
+
+        // Wait for the next finger-on with the remaining budget.
+        wait_for_finger(dev, duration_to_timeout_ms(remaining_total))?;
+
+        let stable_until = Instant::now() + Duration::from_millis(debounce_ms);
+        debug_log!(
+            "[wait_for_stable_finger_on] debouncing contact for {}ms",
+            debounce_ms
+        );
+
+        let mut lost_contact = false;
+        while Instant::now() < stable_until {
+            let until_stable = stable_until
+                .checked_duration_since(Instant::now())
+                .unwrap_or(Duration::ZERO);
+            let remaining_total = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or(Duration::ZERO);
+            let wait_for = until_stable.min(remaining_total);
+
+            if wait_for.is_zero() {
+                return Err(FpError::Timeout);
+            }
+
+            let mut buf = [0u8; IRQ_LENGTH];
+            match dev.handle.read_interrupt(EP_INTR, &mut buf, wait_for) {
+                Ok(n) if n >= 2 => {
+                    let irq_type = u16::from_be_bytes([buf[0], buf[1]]);
+                    debug_log!(
+                        "[wait_for_stable_finger_on] got IRQ during debounce: 0x{:04x}",
+                        irq_type
+                    );
+                    if irq_type == IRQDATA_FINGER_OFF {
+                        lost_contact = true;
+                        break;
+                    }
+                    // Ignore other IRQs.
+                }
+                Ok(_) => {
+                    // Short read — ignore.
+                }
+                Err(rusb::Error::Timeout) => {
+                    // No IRQ in this interval; continue waiting for stability window.
+                }
+                Err(e) => {
+                    return Err(FpError::UsbIo(e));
+                }
+            }
+        }
+
+        if !lost_contact {
+            return Ok(());
+        }
+
+        debug_log!("[wait_for_stable_finger_on] contact bounced, retrying finger-on wait");
+    }
 }
 
 // ── Image decryption ───────────────────────────────────────────────
@@ -307,9 +460,9 @@ fn parse_image_header(raw: &[u8]) -> Result<ImageHeader> {
     let num_lines = u16::from_le_bytes([raw[4], raw[5]]);
     let key_number = raw[6];
     let mut block_info = [(0u8, 0u8); 15];
-    for i in 0..15 {
+    for (i, slot) in block_info.iter_mut().enumerate() {
         let offset = 16 + i * 2;
-        block_info[i] = (raw[offset], raw[offset + 1]);
+        *slot = (raw[offset], raw[offset + 1]);
     }
     Ok(ImageHeader {
         num_lines,
@@ -424,7 +577,7 @@ fn decrypt_image_data(dev: &FpDevice, raw: &mut [u8]) -> Result<()> {
 
     let pixels = &raw[pixel_start..pixel_start + num_lines * IMAGE_WIDTH];
     let dev2 = calc_dev2(pixels, &header);
-    eprintln!(
+    debug_log!(
         "[decrypt] variance={}, threshold={}, encrypted={}",
         dev2,
         ENC_THRESHOLD,
@@ -446,7 +599,12 @@ fn decrypt_image_data(dev: &FpDevice, raw: &mut [u8]) -> Result<()> {
     let mut key_number = header.key_number;
     let enc_seed: u32 = rand_seed();
     let key = read_scramble_key(dev, key_number, enc_seed)?;
-    eprintln!("[decrypt] key_number={:#04x}, seed={:#010x}, key={:#010x}", key_number, enc_seed, key);
+    debug_log!(
+        "[decrypt] key_number={:#04x}, seed={:#010x}, key={:#010x}",
+        key_number,
+        enc_seed,
+        key
+    );
 
     // ── Decrypt block by block ─────────────────────────────────
     let pixels = &mut raw[pixel_start..pixel_start + num_lines * IMAGE_WIDTH];
@@ -460,9 +618,12 @@ fn decrypt_image_data(dev: &FpDevice, raw: &mut [u8]) -> Result<()> {
             break;
         }
 
-        eprintln!(
+        debug_log!(
             "[decrypt] block {}: flags={:#04x}, lines={}, row={}",
-            i, flags, count, row
+            i,
+            flags,
+            count,
+            row
         );
 
         // libfprint: if CHANGE_KEY, re-read the key with a new seed.
@@ -470,9 +631,10 @@ fn decrypt_image_data(dev: &FpDevice, raw: &mut [u8]) -> Result<()> {
             key_number = key_number.wrapping_add(1);
             let new_seed = rand_seed();
             current_key = read_scramble_key(dev, key_number, new_seed)?;
-            eprintln!(
+            debug_log!(
                 "[decrypt] CHANGE_KEY → key_number={:#04x}, new_key={:#010x}",
-                key_number, current_key
+                key_number,
+                current_key
             );
         }
 
@@ -511,7 +673,13 @@ fn decrypt_image_data(dev: &FpDevice, raw: &mut [u8]) -> Result<()> {
 /// reads 4 bytes from `REG_SCRAMBLE_DATA_KEY`, XORs with seed.
 fn read_scramble_key(dev: &FpDevice, key_number: u8, seed: u32) -> Result<u32> {
     let seed_bytes = seed.to_le_bytes();
-    let buf = [key_number, seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]];
+    let buf = [
+        key_number,
+        seed_bytes[0],
+        seed_bytes[1],
+        seed_bytes[2],
+        seed_bytes[3],
+    ];
     write_regs(dev, REG_SCRAMBLE_DATA_INDEX, &buf)?;
 
     let key_bytes = read_reg(dev, REG_SCRAMBLE_DATA_KEY, 4)?;
@@ -650,11 +818,7 @@ fn wait_for_irq(dev: &FpDevice, expected: u16, timeout_ms: u32) -> Result<()> {
         }
 
         let mut buf = [0u8; IRQ_LENGTH];
-        match dev.handle.read_interrupt(
-            EP_INTR,
-            &mut buf,
-            remaining,
-        ) {
+        match dev.handle.read_interrupt(EP_INTR, &mut buf, remaining) {
             Ok(n) if n >= 2 => {
                 let irq_type = u16::from_be_bytes([buf[0], buf[1]]);
                 if irq_type == expected {
@@ -680,10 +844,17 @@ fn wait_for_irq(dev: &FpDevice, expected: u16, timeout_ms: u32) -> Result<()> {
 /// Sets the device to `MODE_AWAIT_FINGER_ON` and polls the interrupt
 /// endpoint for `IRQDATA_FINGER_ON`.
 fn wait_for_finger(dev: &FpDevice, timeout_ms: u32) -> Result<()> {
-    eprintln!("[wait_for_finger] setting MODE_AWAIT_FINGER_ON (0x{:02x})", MODE_AWAIT_FINGER_ON);
+    debug_log!(
+        "[wait_for_finger] setting MODE_AWAIT_FINGER_ON (0x{:02x})",
+        MODE_AWAIT_FINGER_ON
+    );
     write_reg(dev, REG_MODE, MODE_AWAIT_FINGER_ON)?;
 
-    let timeout = if timeout_ms == 0 { u32::MAX } else { timeout_ms };
+    let timeout = if timeout_ms == 0 {
+        u32::MAX
+    } else {
+        timeout_ms
+    };
     let deadline = Instant::now() + Duration::from_millis(timeout as u64);
 
     loop {
@@ -692,7 +863,7 @@ fn wait_for_finger(dev: &FpDevice, timeout_ms: u32) -> Result<()> {
             .unwrap_or(Duration::ZERO);
 
         if remaining.is_zero() {
-            eprintln!("[wait_for_finger] TIMEOUT");
+            debug_log!("[wait_for_finger] TIMEOUT");
             return Err(FpError::Timeout);
         }
 
@@ -700,21 +871,25 @@ fn wait_for_finger(dev: &FpDevice, timeout_ms: u32) -> Result<()> {
         match dev.handle.read_interrupt(EP_INTR, &mut buf, remaining) {
             Ok(n) if n >= 2 => {
                 let irq_type = u16::from_be_bytes([buf[0], buf[1]]);
-                eprintln!("[wait_for_finger] got IRQ: 0x{:04x} ({} bytes)", irq_type, n);
+                debug_log!(
+                    "[wait_for_finger] got IRQ: 0x{:04x} ({} bytes)",
+                    irq_type,
+                    n
+                );
                 if irq_type == IRQDATA_FINGER_ON {
                     return Ok(());
                 }
                 // Ignore other interrupt types.
             }
             Ok(n) => {
-                eprintln!("[wait_for_finger] short IRQ read: {} bytes", n);
+                debug_log!("[wait_for_finger] short IRQ read: {} bytes", n);
             }
             Err(rusb::Error::Timeout) => {
-                eprintln!("[wait_for_finger] TIMEOUT (usb)");
+                debug_log!("[wait_for_finger] TIMEOUT (usb)");
                 return Err(FpError::Timeout);
             }
             Err(e) => {
-                eprintln!("[wait_for_finger] USB error: {}", e);
+                debug_log!("[wait_for_finger] USB error: {}", e);
                 return Err(FpError::UsbIo(e));
             }
         }
@@ -728,7 +903,10 @@ fn wait_for_finger(dev: &FpDevice, timeout_ms: u32) -> Result<()> {
 /// a successful capture so the device can cleanly detect the next
 /// finger-on event.
 fn wait_for_finger_off(dev: &FpDevice, timeout_ms: u32) -> Result<()> {
-    eprintln!("[wait_for_finger_off] setting MODE_AWAIT_FINGER_OFF (0x{:02x})", MODE_AWAIT_FINGER_OFF);
+    debug_log!(
+        "[wait_for_finger_off] setting MODE_AWAIT_FINGER_OFF (0x{:02x})",
+        MODE_AWAIT_FINGER_OFF
+    );
     write_reg(dev, REG_MODE, MODE_AWAIT_FINGER_OFF)?;
 
     let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
@@ -739,7 +917,7 @@ fn wait_for_finger_off(dev: &FpDevice, timeout_ms: u32) -> Result<()> {
             .unwrap_or(Duration::ZERO);
 
         if remaining.is_zero() {
-            eprintln!("[wait_for_finger_off] TIMEOUT");
+            debug_log!("[wait_for_finger_off] TIMEOUT");
             return Err(FpError::Timeout);
         }
 
@@ -747,21 +925,25 @@ fn wait_for_finger_off(dev: &FpDevice, timeout_ms: u32) -> Result<()> {
         match dev.handle.read_interrupt(EP_INTR, &mut buf, remaining) {
             Ok(n) if n >= 2 => {
                 let irq_type = u16::from_be_bytes([buf[0], buf[1]]);
-                eprintln!("[wait_for_finger_off] got IRQ: 0x{:04x} ({} bytes)", irq_type, n);
+                debug_log!(
+                    "[wait_for_finger_off] got IRQ: 0x{:04x} ({} bytes)",
+                    irq_type,
+                    n
+                );
                 if irq_type == IRQDATA_FINGER_OFF {
                     return Ok(());
                 }
                 // Ignore other interrupt types.
             }
             Ok(n) => {
-                eprintln!("[wait_for_finger_off] short IRQ read: {} bytes", n);
+                debug_log!("[wait_for_finger_off] short IRQ read: {} bytes", n);
             }
             Err(rusb::Error::Timeout) => {
-                eprintln!("[wait_for_finger_off] TIMEOUT (usb)");
+                debug_log!("[wait_for_finger_off] TIMEOUT (usb)");
                 return Err(FpError::Timeout);
             }
             Err(e) => {
-                eprintln!("[wait_for_finger_off] USB error: {}", e);
+                debug_log!("[wait_for_finger_off] USB error: {}", e);
                 return Err(FpError::UsbIo(e));
             }
         }
@@ -779,13 +961,18 @@ const MAX_CAPTURE_RETRIES: u32 = 3;
 
 fn bulk_read_image_with_retry(dev: &FpDevice) -> Result<Vec<u8>> {
     for attempt in 1..=MAX_CAPTURE_RETRIES {
-        eprintln!("[bulk_read_retry] attempt {}/{}", attempt, MAX_CAPTURE_RETRIES);
+        debug_log!(
+            "[bulk_read_retry] attempt {}/{}",
+            attempt,
+            MAX_CAPTURE_RETRIES
+        );
         match bulk_read_image(dev) {
             Ok(buf) => return Ok(buf),
             Err(FpError::ImageInvalid(ref msg)) if attempt < MAX_CAPTURE_RETRIES => {
-                eprintln!(
+                debug_log!(
                     "[bulk_read_retry] short/bad read on attempt {}: {}  — retrying",
-                    attempt, msg
+                    attempt,
+                    msg
                 );
                 // Do NOT re-write MODE_CAPTURE.  The device is
                 // still in capture mode and will send data on
@@ -806,7 +993,10 @@ fn bulk_read_image(dev: &FpDevice) -> Result<Vec<u8>> {
     let mut buf = vec![0u8; DATABLK_RQLEN];
     let mut total_read = 0usize;
 
-    eprintln!("[bulk_read] starting (want up to {} bytes)...", DATABLK_RQLEN);
+    debug_log!(
+        "[bulk_read] starting (want up to {} bytes)...",
+        DATABLK_RQLEN
+    );
 
     // The device may split the transfer across multiple USB packets.
     // Keep reading until we have enough data or timeout.
@@ -819,36 +1009,52 @@ fn bulk_read_image(dev: &FpDevice) -> Result<Vec<u8>> {
             .unwrap_or(Duration::ZERO);
 
         if remaining_time.is_zero() {
-            eprintln!("[bulk_read] deadline reached after {} reads, {} bytes", read_count, total_read);
+            debug_log!(
+                "[bulk_read] deadline reached after {} reads, {} bytes",
+                read_count,
+                total_read
+            );
             break;
         }
 
-        match dev.handle.read_bulk(
-            EP_DATA,
-            &mut buf[total_read..],
-            remaining_time,
-        ) {
+        match dev
+            .handle
+            .read_bulk(EP_DATA, &mut buf[total_read..], remaining_time)
+        {
             Ok(n) => {
                 read_count += 1;
-                eprintln!("[bulk_read] read #{}: {} bytes (total: {})", read_count, n, total_read + n);
+                debug_log!(
+                    "[bulk_read] read #{}: {} bytes (total: {})",
+                    read_count,
+                    n,
+                    total_read + n
+                );
                 total_read += n;
                 if n == 0 {
-                    eprintln!("[bulk_read] ZLP — stopping");
+                    debug_log!("[bulk_read] ZLP — stopping");
                     break; // ZLP or device done
                 }
             }
             Err(rusb::Error::Timeout) => {
-                eprintln!("[bulk_read] timeout after {} reads, {} bytes", read_count, total_read);
+                debug_log!(
+                    "[bulk_read] timeout after {} reads, {} bytes",
+                    read_count,
+                    total_read
+                );
                 break;
             }
             Err(e) => {
-                eprintln!("[bulk_read] USB error: {}", e);
+                debug_log!("[bulk_read] USB error: {}", e);
                 return Err(FpError::UsbIo(e));
             }
         }
     }
 
-    eprintln!("[bulk_read] done: {} total bytes in {} reads", total_read, read_count);
+    debug_log!(
+        "[bulk_read] done: {} total bytes in {} reads",
+        total_read,
+        read_count
+    );
 
     if total_read < IMAGE_HEADER_LEN {
         return Err(FpError::ImageInvalid(format!(

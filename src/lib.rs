@@ -67,6 +67,7 @@ pub extern "C" fn fp_open() -> *mut FpDevice {
 /// On failure: returns a non-zero error code.  `*template_out` and
 /// `*len_out` are set to `NULL` / `0`.
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn fp_scan_and_extract(
     dev: *mut FpDevice,
     timeout_ms: u32,
@@ -137,6 +138,7 @@ pub extern "C" fn fp_scan_and_extract(
 ///
 /// Returns `FP_OK` on success, non-zero on failure.
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn fp_verify(
     tmpl_a: *const u8,
     len_a: usize,
@@ -179,6 +181,7 @@ pub extern "C" fn fp_verify(
 /// `fp_scan_and_extract`.  Passing any other pointer is UB.
 /// Calling `fp_free` twice on the same pointer is UB.
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn fp_free(ptr: *mut u8, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
@@ -196,6 +199,7 @@ pub extern "C" fn fp_free(ptr: *mut u8, len: usize) {
 ///
 /// After this call the pointer is invalid.
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn fp_close(dev: *mut FpDevice) {
     if dev.is_null() {
         return;
@@ -221,10 +225,16 @@ pub extern "C" fn fp_strerror(code: i32) -> *const std::os::raw::c_char {
     // truly 'static and null-terminated.
     static STRINGS: &[(&str, &CStr)] = &[
         ("success", c"success"),
-        ("no supported fingerprint device found", c"no supported fingerprint device found"),
+        (
+            "no supported fingerprint device found",
+            c"no supported fingerprint device found",
+        ),
         ("USB I/O error", c"USB I/O error"),
         ("operation timed out", c"operation timed out"),
-        ("no finger detected on sensor", c"no finger detected on sensor"),
+        (
+            "no finger detected on sensor",
+            c"no finger detected on sensor",
+        ),
         ("captured image is invalid", c"captured image is invalid"),
         ("template extraction failed", c"template extraction failed"),
         ("null pointer argument", c"null pointer argument"),

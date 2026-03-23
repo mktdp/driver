@@ -20,8 +20,7 @@ fn main() {
 
     // ── Generate C header ──────────────────────────────────────────
 
-    let config = cbindgen::Config::from_file("cbindgen.toml")
-        .unwrap_or_default();
+    let config = cbindgen::Config::from_file("cbindgen.toml").unwrap_or_default();
 
     if let Ok(bindings) = cbindgen::Builder::new()
         .with_crate(&crate_dir)
@@ -49,7 +48,7 @@ fn fix_nbis_lib64(crate_dir: &str) {
     // Walk up from our OUT_DIR to the `build/` directory that contains
     // all crate build dirs.
     let build_parent = Path::new(&out_dir)
-        .parent()  // fingerprint-driver-XXXX/
+        .parent() // fingerprint-driver-XXXX/
         .and_then(|p| p.parent()); // build/
 
     let build_dir = match build_parent {
@@ -70,9 +69,7 @@ fn fix_nbis_lib64(crate_dir: &str) {
             continue;
         }
 
-        let staging = entry
-            .path()
-            .join("out/build/install_staging/nfiq2");
+        let staging = entry.path().join("out/build/install_staging/nfiq2");
 
         if !staging.is_dir() {
             continue;

@@ -21,3 +21,4 @@ cbindgen = "0.28"
 
 [features]
 hardware-tests = []
+debug-logging = []
