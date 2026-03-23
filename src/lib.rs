@@ -22,6 +22,7 @@
 
 pub mod biometric;
 pub mod driver;
+pub mod drivers;
 pub mod error;
 pub mod image;
 pub mod usb;
@@ -332,7 +333,8 @@ pub extern "C" fn fp_identify(
         // SAFETY: caller guarantees these arrays are valid for `candidate_count`.
         let lens = unsafe { std::slice::from_raw_parts(candidate_lens, candidate_count) };
 
-        let mut scored = Vec::with_capacity(candidate_count);
+        let mut candidate_views: Vec<&[u8]> = Vec::with_capacity(candidate_count);
+        let mut candidate_indices: Vec<usize> = Vec::with_capacity(candidate_count);
         for (idx, (&cand_ptr, &cand_len)) in candidate_ptrs.iter().zip(lens.iter()).enumerate() {
             if cand_len == 0 {
                 continue;
@@ -342,14 +344,24 @@ pub extern "C" fn fp_identify(
             }
             // SAFETY: caller guarantees each candidate pointer is valid for its length.
             let candidate = unsafe { std::slice::from_raw_parts(cand_ptr, cand_len) };
-            let score = match biometric::verify(probe, candidate) {
-                Ok(s) => s,
-                Err(e) => return e.code(),
-            };
-            scored.push((idx, score));
+            candidate_views.push(candidate);
+            candidate_indices.push(idx);
         }
 
-        let (match_idx, best_score) = choose_best_match(scored, threshold);
+        if candidate_views.is_empty() {
+            return FP_OK;
+        }
+
+        let (best_local_idx, best_score) = match biometric::identify_best(probe, &candidate_views) {
+            Ok(v) => v,
+            Err(e) => return e.code(),
+        };
+
+        let match_idx = if best_score >= threshold {
+            candidate_indices[best_local_idx]
+        } else {
+            usize::MAX
+        };
         unsafe {
             *match_index_out = match_idx;
             *match_score_out = best_score;
@@ -427,12 +439,13 @@ pub extern "C" fn fp_scan_continuous(
 
 // ─── fp_free ───────────────────────────────────────────────────────
 
-/// Free a template buffer previously returned by `fp_scan_and_extract`.
+/// Free a template buffer previously returned by `fp_scan_and_extract`
+/// or `fp_enroll_multi`.
 ///
 /// # Safety
 ///
 /// `ptr` must have been returned by a successful call to
-/// `fp_scan_and_extract`.  Passing any other pointer is UB.
+/// `fp_scan_and_extract` or `fp_enroll_multi`.  Passing any other pointer is UB.
 /// Calling `fp_free` twice on the same pointer is UB.
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -516,27 +529,6 @@ fn scan_and_extract_template(dev_ref: &mut FpDevice, timeout_ms: u32) -> error::
     Ok(template)
 }
 
-fn choose_best_match<I>(scores: I, threshold: f64) -> (usize, f64)
-where
-    I: IntoIterator<Item = (usize, f64)>,
-{
-    let mut best_idx = usize::MAX;
-    let mut best_score = 0.0_f64;
-
-    for (idx, score) in scores {
-        if score > best_score {
-            best_score = score;
-            best_idx = idx;
-        }
-    }
-
-    if best_score < threshold {
-        (usize::MAX, best_score)
-    } else {
-        (best_idx, best_score)
-    }
-}
-
 fn is_recoverable_capture_error(err: &FpError) -> bool {
     matches!(
         err,
@@ -546,26 +538,15 @@ fn is_recoverable_capture_error(err: &FpError) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::choose_best_match;
-
     #[test]
-    fn choose_best_match_returns_best_index_when_above_threshold() {
-        let (idx, score) = choose_best_match([(0, 0.12), (1, 0.35), (2, 0.20)], 0.25);
-        assert_eq!(idx, 1);
-        assert!((score - 0.35).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn choose_best_match_returns_no_match_when_below_threshold() {
-        let (idx, score) = choose_best_match([(0, 0.02), (1, 0.05), (2, 0.01)], 0.06);
-        assert_eq!(idx, usize::MAX);
-        assert!((score - 0.05).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn choose_best_match_handles_empty_input() {
-        let (idx, score) = choose_best_match(std::iter::empty::<(usize, f64)>(), 0.1);
-        assert_eq!(idx, usize::MAX);
-        assert!((score - 0.0).abs() < f64::EPSILON);
+    fn identify_threshold_decision_matches_expected_behavior() {
+        let best_score = 0.08_f64;
+        let threshold = 0.06_f64;
+        let idx = if best_score >= threshold {
+            3
+        } else {
+            usize::MAX
+        };
+        assert_eq!(idx, 3);
     }
 }

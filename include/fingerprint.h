@@ -197,12 +197,13 @@ int32_t fp_scan_continuous(FpDevice *dev,
                            void *userData);
 
 /**
- * Free a template buffer previously returned by `fp_scan_and_extract`.
+ * Free a template buffer previously returned by `fp_scan_and_extract`
+ * or `fp_enroll_multi`.
  *
  * # Safety
  *
  * `ptr` must have been returned by a successful call to
- * `fp_scan_and_extract`.  Passing any other pointer is UB.
+ * `fp_scan_and_extract` or `fp_enroll_multi`.  Passing any other pointer is UB.
  * Calling `fp_free` twice on the same pointer is UB.
  */
 void fp_free(uint8_t *ptr, uintptr_t len);

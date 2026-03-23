@@ -115,46 +115,35 @@ pub fn extract(grayscale: &[u8]) -> Result<Vec<u8>> {
 ///
 /// # Returns
 /// A similarity score in `[0.0, 1.0]`.
+///
+/// For multi-view enrollment bundles (`FPM1`), the final score is the
+/// median of all pairwise view scores (consensus scoring).
 pub fn verify(tmpl_a: &[u8], tmpl_b: &[u8]) -> Result<f64> {
-    use nbis::{NbisExtractor, NbisExtractorSettings};
+    let extractor = new_extractor()?;
+    verify_with_extractor(&extractor, tmpl_a, tmpl_b)
+}
 
-    let settings = NbisExtractorSettings {
-        min_quality: 0.0,
-        get_center: false,
-        check_fingerprint: false,
-        compute_nfiq2: false,
-        ppi: Some(SENSOR_DPI as f64),
-    };
+/// Identify the best candidate for one probe template.
+///
+/// Returns `(best_index, best_score)` over `candidates`.
+pub fn identify_best(probe: &[u8], candidates: &[&[u8]]) -> Result<(usize, f64)> {
+    if candidates.is_empty() {
+        return Err(FpError::ExtractFail("no candidate templates".into()));
+    }
 
-    let extractor = NbisExtractor::new(settings)
-        .map_err(|e| FpError::ExtractFail(format!("failed to create extractor: {}", e)))?;
+    let extractor = new_extractor()?;
 
-    let views_a = template_views(tmpl_a)?;
-    let views_b = template_views(tmpl_b)?;
-
-    let mut best = 0.0_f64;
-    let mut compared = 0usize;
-    for a in &views_a {
-        for b in &views_b {
-            let score = verify_iso_pair(&extractor, a, b)?;
-            if score > best {
-                best = score;
-            }
-            compared += 1;
+    let mut best_index = 0usize;
+    let mut best_score = f64::MIN;
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let score = verify_with_extractor(&extractor, probe, candidate)?;
+        if score > best_score {
+            best_score = score;
+            best_index = idx;
         }
     }
 
-    if compared == 0 {
-        return Err(FpError::ExtractFail("no templates to compare".into()));
-    }
-
-    debug_log!(
-        "[verify] compared {} pair(s), best score: {:.4}",
-        compared,
-        best
-    );
-
-    Ok(best)
+    Ok((best_index, best_score.max(0.0)))
 }
 
 /// Build one opaque enrollment template from multiple same-finger captures.
@@ -213,6 +202,92 @@ fn verify_iso_pair(extractor: &nbis::NbisExtractor, tmpl_a: &[u8], tmpl_b: &[u8]
     // We clamp to 400 and map to [0, 1].
     const MAX_SCORE: f64 = 400.0;
     Ok((raw_score as f64 / MAX_SCORE).clamp(0.0, 1.0))
+}
+
+fn new_extractor() -> Result<nbis::NbisExtractor> {
+    use nbis::{NbisExtractor, NbisExtractorSettings};
+
+    let settings = NbisExtractorSettings {
+        min_quality: 0.0,
+        get_center: false,
+        check_fingerprint: false,
+        compute_nfiq2: false,
+        ppi: Some(SENSOR_DPI as f64),
+    };
+
+    NbisExtractor::new(settings)
+        .map_err(|e| FpError::ExtractFail(format!("failed to create extractor: {}", e)))
+}
+
+fn verify_with_extractor(
+    extractor: &nbis::NbisExtractor,
+    tmpl_a: &[u8],
+    tmpl_b: &[u8],
+) -> Result<f64> {
+    let views_a = template_views(tmpl_a)?;
+    let views_b = template_views(tmpl_b)?;
+
+    let mut scores = Vec::with_capacity(views_a.len().saturating_mul(views_b.len()));
+    for a in &views_a {
+        for b in &views_b {
+            let score = verify_iso_pair(extractor, a, b)?;
+            scores.push(score);
+        }
+    }
+
+    if scores.is_empty() {
+        return Err(FpError::ExtractFail("no templates to compare".into()));
+    }
+
+    let (best, second_best) = top_two_scores(&scores);
+    let median = median_score(&scores);
+    let final_score = aggregate_match_score(&scores);
+    debug_log!(
+        "[verify] compared {} pair(s), best={:.4}, second={:.4}, median={:.4}, final={:.4}",
+        scores.len(),
+        best,
+        second_best,
+        median,
+        final_score
+    );
+
+    Ok(final_score)
+}
+
+fn aggregate_match_score(scores: &[f64]) -> f64 {
+    match scores.len() {
+        0 => 0.0,
+        1 => scores[0],
+        _ => median_score(scores),
+    }
+}
+
+fn median_score(scores: &[f64]) -> f64 {
+    if scores.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = scores.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let n = sorted.len();
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    }
+}
+
+fn top_two_scores(scores: &[f64]) -> (f64, f64) {
+    let mut best = 0.0_f64;
+    let mut second_best = 0.0_f64;
+    for &score in scores {
+        if score >= best {
+            second_best = best;
+            best = score;
+        } else if score > second_best {
+            second_best = score;
+        }
+    }
+    (best, second_best)
 }
 
 fn template_views(raw: &[u8]) -> Result<Vec<&[u8]>> {
@@ -769,23 +844,74 @@ mod tests {
     }
 
     #[test]
-    fn verify_bundle_matches_best_view() {
+    fn verify_bundle_uses_median_consensus() {
         let t1 = make_template(&[(1, 100, 100, 20, 50), (2, 130, 110, 80, 45)]);
         let t2 = make_template(&[(1, 220, 150, 40, 50), (2, 240, 170, 90, 40)]);
         let probe = t1.clone();
 
         let s1 = verify(&t1, &probe).expect("verify t1/probe");
         let s2 = verify(&t2, &probe).expect("verify t2/probe");
-        let expected = s1.max(s2);
+        let expected = (s1.max(s2) + s1.min(s2)) / 2.0;
 
         let bundle = enrollment_bundle(&[t1, t2]).expect("bundle should build");
         let got = verify(&bundle, &probe).expect("verify bundle/probe");
 
         assert!(
             (got - expected).abs() < 1e-9,
-            "bundle score {} should equal best single-view score {}",
+            "bundle score {} should equal median consensus score {}",
             got,
             expected
         );
+    }
+
+    #[test]
+    fn aggregate_match_score_reduces_single_view_spike() {
+        let scores = [0.065, 0.020, 0.000];
+        let got = aggregate_match_score(&scores);
+        assert!(
+            got < 0.06,
+            "median consensus score should drop below 0.06 for one-view spike, got {}",
+            got
+        );
+    }
+
+    #[test]
+    fn aggregate_match_score_uses_median_for_even_count() {
+        let scores = [0.1250, 0.0625, 0.0525, 0.0500, 0.0400, 0.0300];
+        let got = aggregate_match_score(&scores);
+        let expected = (0.0500 + 0.0525) / 2.0;
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "expected median score {}, got {}",
+            expected,
+            got
+        );
+    }
+
+    #[test]
+    fn identify_best_returns_matching_candidate_index() {
+        let probe = make_template(&[(1, 100, 100, 20, 50), (2, 130, 110, 80, 45)]);
+        let c1 = make_template(&[(1, 220, 150, 40, 50), (2, 240, 170, 90, 40)]);
+        let c2 = probe.clone();
+        let candidates = vec![c1.as_slice(), c2.as_slice()];
+
+        let (idx, score) = identify_best(&probe, &candidates).expect("identify should succeed");
+        let s0 = verify(&probe, candidates[0]).expect("score candidate 0");
+        let s1 = verify(&probe, candidates[1]).expect("score candidate 1");
+        let expected_idx = if s1 > s0 { 1 } else { 0 };
+        let expected_score = s0.max(s1);
+
+        assert_eq!(idx, expected_idx, "best index should match highest score");
+        assert!(
+            (score - expected_score).abs() < 1e-9,
+            "best score should equal max candidate score"
+        );
+    }
+
+    #[test]
+    fn identify_best_errors_on_empty_candidate_list() {
+        let probe = make_template(&[(1, 100, 100, 20, 50)]);
+        let err = identify_best(&probe, &[]).expect_err("empty candidates should fail");
+        assert!(matches!(err, FpError::ExtractFail(_)));
     }
 }

@@ -8,16 +8,16 @@
 //! - Supported backends: DigitalPersona U.are.U 4500 (`usb` module)
 //! - Future backends can be added by extending `DRIVER_REGISTRY`.
 
+use crate::drivers::digitalpersona;
 use crate::error::{FpError, Result};
 use crate::image;
-use crate::usb;
 
 /// Image width in pixels for currently supported hardware.
-pub const IMAGE_WIDTH: usize = usb::IMAGE_WIDTH;
+pub const IMAGE_WIDTH: usize = digitalpersona::IMAGE_WIDTH;
 /// Image height in pixels for currently supported hardware.
-pub const IMAGE_HEIGHT: usize = usb::IMAGE_HEIGHT;
+pub const IMAGE_HEIGHT: usize = digitalpersona::IMAGE_HEIGHT;
 /// Expected raw header length in bytes.
-pub const IMAGE_HEADER_LEN: usize = usb::IMAGE_HEADER_LEN;
+pub const IMAGE_HEADER_LEN: usize = digitalpersona::IMAGE_HEADER_LEN;
 
 /// Identifier for supported hardware drivers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +45,7 @@ pub struct FpDevice {
 }
 
 enum DeviceInner {
-    DigitalPersona(usb::FpDevice),
+    DigitalPersona(digitalpersona::Device),
 }
 
 struct DriverRegistration {
@@ -89,7 +89,7 @@ pub fn open() -> Result<FpDevice> {
 /// Capture a raw frame from the currently active backend.
 pub fn scan(dev: &mut FpDevice, timeout_ms: u32) -> Result<Vec<u8>> {
     match &mut dev.inner {
-        DeviceInner::DigitalPersona(inner) => usb::scan(inner, timeout_ms),
+        DeviceInner::DigitalPersona(inner) => digitalpersona::scan(inner, timeout_ms),
     }
 }
 
@@ -100,7 +100,7 @@ pub fn scan(dev: &mut FpDevice, timeout_ms: u32) -> Result<Vec<u8>> {
 pub fn capture_grayscale(dev: &mut FpDevice, timeout_ms: u32) -> Result<Vec<u8>> {
     match &mut dev.inner {
         DeviceInner::DigitalPersona(inner) => {
-            let raw = usb::scan(inner, timeout_ms)?;
+            let raw = digitalpersona::scan(inner, timeout_ms)?;
             image::deframe(&raw)
         }
     }
@@ -109,7 +109,7 @@ pub fn capture_grayscale(dev: &mut FpDevice, timeout_ms: u32) -> Result<Vec<u8>>
 /// Close an opened scanner handle.
 pub fn close(dev: FpDevice) {
     match dev.inner {
-        DeviceInner::DigitalPersona(inner) => usb::close(inner),
+        DeviceInner::DigitalPersona(inner) => digitalpersona::close(inner),
     }
 }
 
@@ -125,7 +125,7 @@ pub fn supported_driver_names() -> &'static [&'static str] {
 }
 
 fn open_digitalpersona() -> Result<DeviceInner> {
-    usb::open().map(DeviceInner::DigitalPersona)
+    digitalpersona::open().map(DeviceInner::DigitalPersona)
 }
 
 #[cfg(test)]

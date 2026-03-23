@@ -40,7 +40,7 @@ What this does internally:
 - Captures 6 templates from the same finger
 - Retries recoverable capture failures per slot
 - Stores all captures inside one opaque enrollment package
-- `fp_verify` compares a live scan against all stored views and uses the best score
+- `fp_verify` compares a live scan against all stored views and uses a median consensus score
 
 What the enrollment package actually is:
 - Yes, it is just a byte array (`uint8_t*` + length).

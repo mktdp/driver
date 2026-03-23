@@ -309,7 +309,10 @@ Use `fp_strerror(code)` to get a human-readable string.
 │   └── fingerprint/     # Go cgo bindings + tests
 └── src/
     ├── lib.rs           # extern "C" API surface
-    ├── usb.rs           # USB device open/init/capture/close
+    ├── driver.rs        # runtime driver registry + dispatch
+    ├── drivers/
+    │   └── digitalpersona.rs # DigitalPersona backend adapter
+    ├── usb.rs           # DigitalPersona USB protocol implementation
     ├── image.rs         # deframe, descramble, normalise raw image
     ├── biometric.rs     # MINDTCT extract + BOZORTH3 verify
     └── error.rs         # FpError enum + FFI error codes
