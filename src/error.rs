@@ -1,4 +1,4 @@
-//! Error types and FFI error codes for the fingerprint driver.
+//! Error types and FFI error codes for the driver library.
 
 use thiserror::Error;
 

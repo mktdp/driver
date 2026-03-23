@@ -14,7 +14,12 @@ echo "[3/7] rust tests (non-hardware)..."
 cargo test
 
 echo "[4/7] compile hardware examples..."
-cargo check --example hw_smoke_test --example biometric_validation --features hardware-tests
+cargo check \
+  --example hw_smoke_test \
+  --example biometric_validation \
+  --example hw_enroll_merge_verify \
+  --example hw_continuous_scan_dump \
+  --features hardware-tests
 
 echo "[5/7] build debug shared library..."
 cargo build --features hardware-tests
@@ -25,7 +30,7 @@ gcc -std=c11 -Wall -Wextra -O2 \
   -Iinclude \
   tests/test.c \
   -Ltarget/debug \
-  -lfingerprint_driver \
+  -lmktdp_driver \
   -Wl,-rpath,"$ROOT_DIR/target/debug" \
   -o target/debug/c_smoke_test_ci
 

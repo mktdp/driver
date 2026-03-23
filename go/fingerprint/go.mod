@@ -1,3 +1,3 @@
-module fingerprint-driver/go/fingerprint
+module github.com/mktdp/driver/go/fingerprint
 
 go 1.22

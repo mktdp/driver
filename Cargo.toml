@@ -1,9 +1,10 @@
 [package]
-name = "fingerprint-driver"
+name = "mktdp-driver"
 version = "0.1.0"
 edition = "2021"
-description = "Stateless fingerprint driver library for DigitalPersona U.are.U 4500 / compatible scanners"
+description = "Stateless biometric driver library for DigitalPersona U.are.U 4500 / compatible scanners"
 license = "MIT"
+repository = "https://github.com/mktdp/driver"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

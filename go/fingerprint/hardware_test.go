@@ -46,6 +46,26 @@ func TestHardwareEnrollVerify(t *testing.T) {
 	t.Logf("similarity score: %.4f", score)
 }
 
+func TestHardwareEnrollConsensus(t *testing.T) {
+	requireHardwareTests(t)
+
+	dev, err := Open()
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer dev.Close()
+
+	t.Log("enrollment: place the SAME finger repeatedly for 6 scans...")
+	tmpl, err := EnrollFromScans(dev, 6, 10_000, 4)
+	if err != nil {
+		t.Fatalf("enroll consensus: %v", err)
+	}
+	t.Logf("consensus template size: %d", len(tmpl))
+	if len(tmpl) == 0 {
+		t.Fatal("consensus template must not be empty")
+	}
+}
+
 func TestHardwareVerifyFromGoroutine(t *testing.T) {
 	requireHardwareTests(t)
 

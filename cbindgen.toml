@@ -1,4 +1,4 @@
-# cbindgen configuration for fingerprint-driver
+# cbindgen configuration for mktdp/driver
 
 language = "C"
 include_guard = "FINGERPRINT_H"

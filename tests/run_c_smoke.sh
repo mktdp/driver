@@ -13,7 +13,7 @@ gcc -std=c11 -Wall -Wextra -O2 \
   -Iinclude \
   tests/test.c \
   -Ltarget/debug \
-  -lfingerprint_driver \
+  -lmktdp_driver \
   -Wl,-rpath,"$ROOT_DIR/target/debug" \
   -o target/debug/c_smoke_test
 

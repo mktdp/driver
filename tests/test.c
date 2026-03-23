@@ -38,7 +38,7 @@ int main(void) {
     double threshold = match_threshold_from_env();
     int exit_code = 1;
 
-    printf("=== Fingerprint Driver — C Smoke Test ===\n\n");
+    printf("=== MKTDP Driver — C Smoke Test ===\n\n");
     printf("Match threshold: %.4f (set FP_MATCH_THRESHOLD to override)\n\n", threshold);
 
     printf("[1/6] Opening scanner...\n");

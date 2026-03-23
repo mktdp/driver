@@ -10,14 +10,14 @@
 //! device at a time.
 
 #[cfg(feature = "hardware-tests")]
-use fingerprint_driver::{biometric, image, usb};
+use mktdp_driver::{biometric, driver, image};
 
 /// Test that we can open and close the device without panicking.
 #[test]
 #[cfg(feature = "hardware-tests")]
 fn hw_open_close() {
-    let dev = usb::open().expect("failed to open scanner — is it plugged in?");
-    usb::close(dev);
+    let dev = driver::open().expect("failed to open scanner — is it plugged in?");
+    driver::close(dev);
 }
 
 /// Test that we can capture a raw frame from the device.
@@ -26,21 +26,21 @@ fn hw_open_close() {
 #[test]
 #[cfg(feature = "hardware-tests")]
 fn hw_capture_raw_frame() {
-    let mut dev = usb::open().expect("failed to open scanner");
+    let mut dev = driver::open().expect("failed to open scanner");
 
     // 15 second timeout — enough time to place finger.
-    let raw_frame = usb::scan(&mut dev, 15_000)
+    let raw_frame = driver::scan(&mut dev, 15_000)
         .expect("scan failed — did you place your finger on the sensor?");
 
     // Should have at least the header + some pixel data.
     assert!(
-        raw_frame.len() > usb::IMAGE_HEADER_LEN,
+        raw_frame.len() > driver::IMAGE_HEADER_LEN,
         "raw frame too short: {} bytes",
         raw_frame.len()
     );
 
     println!("raw frame: {} bytes", raw_frame.len());
-    usb::close(dev);
+    driver::close(dev);
 }
 
 /// Test the full pipeline: capture → deframe → extract template.
@@ -49,15 +49,16 @@ fn hw_capture_raw_frame() {
 #[test]
 #[cfg(feature = "hardware-tests")]
 fn hw_extract_template() {
-    let mut dev = usb::open().expect("failed to open scanner");
+    let mut dev = driver::open().expect("failed to open scanner");
 
-    let raw_frame = usb::scan(&mut dev, 15_000).expect("scan failed — did you place your finger?");
+    let raw_frame =
+        driver::scan(&mut dev, 15_000).expect("scan failed — did you place your finger?");
 
     let grayscale = image::deframe(&raw_frame).expect("deframe failed");
 
     assert_eq!(
         grayscale.len(),
-        usb::IMAGE_WIDTH * usb::IMAGE_HEIGHT,
+        driver::IMAGE_WIDTH * driver::IMAGE_HEIGHT,
         "unexpected image dimensions"
     );
 
@@ -69,7 +70,7 @@ fn hw_extract_template() {
     );
 
     println!("template: {} bytes", template.len());
-    usb::close(dev);
+    driver::close(dev);
 }
 
 /// Test that two scans of the same finger produce matching templates.
@@ -83,7 +84,7 @@ fn hw_extract_template() {
 #[test]
 #[cfg(feature = "hardware-tests")]
 fn hw_same_finger_match() {
-    let mut dev = usb::open().expect("failed to open scanner");
+    let mut dev = driver::open().expect("failed to open scanner");
 
     println!("\n>>> Place your finger on the scanner for FIRST scan...");
     let tmpl_a = capture_template(&mut dev);
@@ -106,13 +107,13 @@ fn hw_same_finger_match() {
         score
     );
 
-    usb::close(dev);
+    driver::close(dev);
 }
 
 /// Helper: scan + deframe + extract in one call.
 #[cfg(feature = "hardware-tests")]
-fn capture_template(dev: &mut usb::FpDevice) -> Vec<u8> {
-    let raw = usb::scan(dev, 15_000).expect("scan failed");
+fn capture_template(dev: &mut driver::FpDevice) -> Vec<u8> {
+    let raw = driver::scan(dev, 15_000).expect("scan failed");
     let gray = image::deframe(&raw).expect("deframe failed");
     biometric::extract(&gray).expect("extract failed")
 }

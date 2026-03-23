@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# setup.sh — Install system dependencies for building fingerprint-driver.
+# setup.sh — Install system dependencies for building mktdp/driver.
 #
 # Usage:
 #   ./scripts/setup.sh

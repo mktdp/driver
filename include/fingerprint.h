@@ -8,6 +8,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+
+
+
+
+
+
 /**
  * Operation completed successfully.
  */
@@ -56,34 +62,9 @@
 #define NOT_PRESENT 1
 
 /**
- * Width of the captured image in pixels.
- */
-#define IMAGE_WIDTH 384
-
-/**
- * Height of the captured image in pixels.
- */
-#define IMAGE_HEIGHT 289
-
-/**
  * Expected pixel count for a valid, deframed image.
  */
 #define IMAGE_SIZE (IMAGE_WIDTH * IMAGE_HEIGHT)
-
-/**
- * Length of the `uru4k_image` header in bytes.
- *
- * Layout (from libfprint):
- * ```text
- *   [0..4]   unknown
- *   [4..6]   num_lines (u16 LE)
- *   [6]      key_number (u8)
- *   [7..16]  unknown
- *   [16..46] block_info (15 × 2 bytes: flags + num_lines)
- *   [46..64] unknown
- * ```
- */
-#define IMAGE_HEADER_LEN 64
 
 #define CHANGE_KEY 128
 
@@ -92,15 +73,24 @@
 #define ENCRYPTED 2
 
 /**
- * Opaque handle to an opened fingerprint scanner.
+ * Opaque opened scanner handle.
  *
- * Constructed by [`open()`] and destroyed by [`close()`].  Not
- * `Send` or `Sync` — callers must serialise access.
+ * The active backend is hidden behind an enum so the public C ABI
+ * does not change as new drivers are added.
  */
 typedef struct FpDevice FpDevice;
 
 /**
- * Open the first available U.are.U 4500 scanner.
+ * Callback signature used by [`fp_scan_continuous`].
+ *
+ * The callback receives a borrowed template pointer valid only for
+ * the duration of the callback invocation. Return `true` to keep
+ * scanning, or `false` to stop.
+ */
+typedef bool (*FpTemplateCallback)(const uint8_t*, uintptr_t, void*);
+
+/**
+ * Open the first available supported scanner.
  *
  * Returns an opaque device handle on success, or `NULL` on failure.
  * The handle is **not** thread-safe.
@@ -127,6 +117,27 @@ int32_t fp_scan_and_extract(FpDevice *dev,
                             uintptr_t *lenOut);
 
 /**
+ * Capture multiple scans of the same finger and combine them into one
+ * enrollment template package.
+ *
+ * This function performs enrollment-style multi-capture:
+ * - captures `scan_count` templates from the same finger
+ * - retries each slot up to `max_attempts_per_scan` on recoverable capture failures
+ * - combines all captured templates into one opaque multi-view template
+ *
+ * `scan_count` should typically be `6`.
+ *
+ * On success: returns `FP_OK`, sets `*template_out` and `*len_out`.
+ * Caller must free with `fp_free`.
+ */
+int32_t fp_enroll_multi(FpDevice *dev,
+                        uint32_t timeoutMs,
+                        uint32_t scanCount,
+                        uint32_t maxAttemptsPerScan,
+                        uint8_t **templateOut,
+                        uintptr_t *lenOut);
+
+/**
  * Compare two templates and output a similarity score.
  *
  * Does **not** require a device handle.  `score_out` is written on
@@ -139,6 +150,51 @@ int32_t fp_verify(const uint8_t *tmplA,
                   const uint8_t *tmplB,
                   uintptr_t lenB,
                   double *scoreOut);
+
+/**
+ * Identify the best match for one probe template against a candidate set.
+ *
+ * This is a 1:N helper for backend/app code that already has a table of
+ * stored enrollment templates (for example, users in an access-control app).
+ *
+ * Inputs:
+ * - `probe_tmpl` / `probe_len`: the freshly scanned template
+ * - `candidates`: array of candidate template pointers
+ * - `candidate_lens`: array of candidate template lengths
+ * - `candidate_count`: number of entries in both arrays
+ * - `threshold`: match threshold in `[0.0, 1.0]`
+ *
+ * Outputs:
+ * - `*match_index_out`: index of best candidate if score >= threshold, else `SIZE_MAX`
+ * - `*match_score_out`: best score found across all candidates
+ *
+ * Returns `FP_OK` on success, non-zero on failure.
+ */
+int32_t fp_identify(const uint8_t *probeTmpl,
+                    uintptr_t probeLen,
+                    const uint8_t *const *candidates,
+                    const uintptr_t *candidateLens,
+                    uintptr_t candidateCount,
+                    double threshold,
+                    uintptr_t *matchIndexOut,
+                    double *matchScoreOut);
+
+/**
+ * Keep scanner active and stream templates via callback.
+ *
+ * This helper is intended for attendance/check-in workflows where
+ * the scanner stays open and many users scan one after another.
+ *
+ * - `max_scans = 0` means run until callback returns `false`.
+ * - Recoverable capture failures are ignored and scanning continues.
+ * - Callback receives a borrowed template pointer that is only valid
+ *   during callback execution; copy it if needed.
+ */
+int32_t fp_scan_continuous(FpDevice *dev,
+                           uint32_t timeoutMs,
+                           uint32_t maxScans,
+                           FpTemplateCallback callback,
+                           void *userData);
 
 /**
  * Free a template buffer previously returned by `fp_scan_and_extract`.

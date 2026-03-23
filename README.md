@@ -1,4 +1,4 @@
-# fingerprint-driver
+# mktdp/driver
 
 Stateless native Rust library for capturing fingerprint images from a
 **DigitalPersona U.are.U 4500** USB scanner and producing opaque biometric
@@ -6,6 +6,11 @@ templates via NIST MINDTCT + BOZORTH3.
 
 The library exposes a **C ABI** (`extern "C"`) so any language with FFI
 support (Go, PHP, Node.js, Python, …) can call it without modification.
+
+Driver model:
+- Multi-driver architecture (driver registry + runtime dispatch)
+- Current backend: `digitalpersona-uru4500`
+- `fp_open()` automatically selects the first available registered driver
 
 ---
 
@@ -48,7 +53,7 @@ Outputs:
 
 | Artifact                  | Path                                              |
 | ------------------------- | ------------------------------------------------- |
-| Shared library            | `target/{debug,release}/libfingerprint_driver.so` |
+| Shared library            | `target/{debug,release}/libmktdp_driver.so` |
 | C header (auto-generated) | `include/fingerprint.h`                           |
 
 ### 4. Run unit tests (no hardware required)
@@ -67,7 +72,15 @@ cargo test --features hardware-tests
 
 ## C API overview
 
-Include `fingerprint.h` and link against `libfingerprint_driver.so`.
+Include `fingerprint.h` and link against `libmktdp_driver.so`.
+
+Key high-level functions:
+
+- `fp_enroll_multi(...)`: capture multiple scans (recommended 6) and return one enrollment template package
+- `fp_scan_and_extract(...)`: one live scan to template
+- `fp_verify(...)`: compare two templates
+- `fp_identify(...)`: find best match index for one probe against N stored templates
+- `fp_scan_continuous(...)`: keep scanner active and stream templates via callback
 
 ```c
 #include "fingerprint.h"
@@ -102,20 +115,46 @@ int main(void) {
 Compile:
 
 ```bash
-gcc -o test_fp test.c -I include -L target/release -lfingerprint_driver -Wl,-rpath,'$ORIGIN'
+gcc -o test_fp test.c -I include -L target/release -lmktdp_driver -Wl,-rpath,'$ORIGIN'
+```
+
+Identify one probe against many enrolled templates:
+
+```c
+// probe/probe_len come from fp_scan_and_extract(...)
+size_t match_index = SIZE_MAX;
+double best_score = 0.0;
+
+int32_t rc = fp_identify(
+    probe, probe_len,
+    templates, template_lens, candidate_count,
+    0.06,
+    &match_index, &best_score
+);
+
+if (rc == FP_OK && match_index != SIZE_MAX) {
+    // match_index is the winning row in your application dataset
+}
 ```
 
 ---
 
 ## Go bindings (Milestone 4)
 
-A cgo wrapper is available at `go/fingerprint` with:
+A cgo wrapper is available at `go/fingerprint` (primarily integration/testing wrapper) with:
 
 - `Open() (*Device, error)`
 - `Enroll(dev *Device) ([]byte, error)`
 - `Verify(a, b []byte) (float64, error)`
+- `EnrollConsensus(dev *Device) ([]byte, error)` (6 scans of same finger -> one stable template)
+- `EnrollFromScans(dev, scans, timeoutMs, maxAttemptsPerScan)` (custom enrollment flow)
+- `ScanContinuously(dev, timeoutMs, onTemplate)` (attendance/check-in style continuous scanning)
 - `MatchThreshold() float64` (default `0.06`, override via `FP_MATCH_THRESHOLD`)
 - `IsMatch(score float64) bool`
+
+End-user native integration walkthrough:
+
+- `docs/END_USER_GUIDE.md`
 
 Run non-hardware tests:
 
@@ -127,7 +166,19 @@ GOCACHE=/tmp/go-build go test ./...
 Run hardware integration tests (real scanner required):
 
 ```bash
-./scripts/run_go_hardware_test.sh
+./tests/run_go_hardware_test.sh
+```
+
+Run 6-scan enrollment package + verify hardware test:
+
+```bash
+./tests/run_hw_enroll_merge_verify.sh
+```
+
+Run continuous scan dump (press `Ctrl+C` to stop):
+
+```bash
+./tests/run_hw_continuous_dump.sh
 ```
 
 ---
@@ -142,10 +193,14 @@ Build and assemble a release bundle:
 
 This creates `dist/` with:
 
-- `libfingerprint_driver.so` (Linux; platform-specific extension on macOS/Windows)
+- `libmktdp_driver.so` (Linux; platform-specific extension on macOS/Windows)
 - `include/fingerprint.h`
 - `README.md`
 - `LICENSE`
+
+Automated GitHub releases are also enabled on tag push. Pushing a tag
+like `v1.0.0` triggers `.github/workflows/release.yml`, which builds and
+uploads a `dist` archive to the GitHub Release for that tag.
 
 ---
 
@@ -160,6 +215,9 @@ Run the same checks as CI locally:
 This runs formatting, clippy (`-D warnings`), Rust tests, example compile checks,
 C smoke-test compile check, and Go non-hardware tests.
 
+Detailed test workflows (hardware + validation) are documented in
+`docs/TESTING.md`.
+
 ---
 
 ## Biometric validation
@@ -167,19 +225,19 @@ C smoke-test compile check, and Go non-hardware tests.
 Run interactive score clustering/threshold validation (same finger vs different finger):
 
 ```bash
-./scripts/run_biometric_validation.sh
+./tests/run_biometric_validation.sh
 ```
 
 Optional overrides:
 
 ```bash
-./scripts/run_biometric_validation.sh --same 10 --diff 10 --timeout 10000
+./tests/run_biometric_validation.sh --same 10 --diff 10 --timeout 10000
 ```
 
 Capture timing tuning (optional):
 
 ```bash
-FP_FINGER_DEBOUNCE_MS=220 FP_CAPTURE_SETTLE_MS=0 FP_CAPTURE_HOLD_MS=0 ./scripts/run_biometric_validation.sh --same 10 --diff 10 --timeout 10000
+FP_FINGER_DEBOUNCE_MS=220 FP_CAPTURE_SETTLE_MS=0 FP_CAPTURE_HOLD_MS=0 ./tests/run_biometric_validation.sh --same 10 --diff 10 --timeout 10000
 ```
 
 Env vars:
@@ -195,8 +253,11 @@ Env vars:
 | Function              | Allocates?            | Caller must…                                     |
 | --------------------- | --------------------- | ------------------------------------------------ |
 | `fp_open`             | Yes (device handle)   | Call `fp_close` exactly once                     |
+| `fp_enroll_multi`     | Yes (template buffer) | Call `fp_free(ptr, len)` exactly once on success |
 | `fp_scan_and_extract` | Yes (template buffer) | Call `fp_free(ptr, len)` exactly once on success |
 | `fp_verify`           | No                    | Nothing — borrows pointers only                  |
+| `fp_identify`         | No                    | Nothing — borrows pointers only                  |
+| `fp_scan_continuous`  | No (callback borrow)  | Copy callback bytes if you need to retain them   |
 | `fp_free`             | No (deallocates)      | Never call twice on same pointer                 |
 | `fp_close`            | No (deallocates)      | Never use handle after close                     |
 
@@ -231,11 +292,19 @@ Use `fp_strerror(code)` to get a human-readable string.
 │   └── fingerprint.h    # auto-generated C header
 ├── scripts/
 │   ├── setup.sh         # system dependency installer
+│   ├── package_dist.sh
+│   └── ci_check.sh
+├── docs/
+│   ├── TESTING.md       # detailed test commands and troubleshooting
+│   └── END_USER_GUIDE.md # enrollment + attendance integration guide
+├── tests/
+│   ├── hardware.rs      # Rust hardware integration tests
+│   ├── test.c           # C ABI smoke test source
 │   ├── run_c_smoke.sh
 │   ├── run_go_hardware_test.sh
-│   ├── package_dist.sh
-│   ├── ci_check.sh
-│   └── run_biometric_validation.sh
+│   ├── run_biometric_validation.sh
+│   ├── run_hw_enroll_merge_verify.sh
+│   └── run_hw_continuous_dump.sh
 ├── go/
 │   └── fingerprint/     # Go cgo bindings + tests
 └── src/

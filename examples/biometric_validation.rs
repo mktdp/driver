@@ -21,7 +21,7 @@ use std::env;
 use std::thread;
 use std::time::Duration;
 
-use fingerprint_driver::{biometric, image, usb};
+use mktdp_driver::{biometric, driver, image};
 
 const DEFAULT_SAME_COUNT: usize = 10;
 const DEFAULT_DIFF_COUNT: usize = 10;
@@ -57,7 +57,7 @@ fn main() {
         }
     };
 
-    println!("=== Fingerprint Driver — Biometric Validation ===\n");
+    println!("=== MKTDP Driver — Biometric Validation ===\n");
     let threshold = match_threshold_from_env();
     println!("Config:");
     println!("  same-finger captures (A): {}", cfg.same_count);
@@ -69,7 +69,7 @@ fn main() {
     );
 
     println!("[1/5] Opening scanner...");
-    let mut dev = match usb::open() {
+    let mut dev = match driver::open() {
         Ok(d) => {
             println!("  ✓ Scanner opened.\n");
             d
@@ -88,7 +88,7 @@ fn main() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("  ✗ Capture set A failed: {}", e);
-            usb::close(dev);
+            driver::close(dev);
             std::process::exit(1);
         }
     };
@@ -105,7 +105,7 @@ fn main() {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("  ✗ Capture set B failed: {}", e);
-                usb::close(dev);
+                driver::close(dev);
                 std::process::exit(1);
             }
         }
@@ -119,7 +119,7 @@ fn main() {
         Ok(s) => s,
         Err(e) => {
             eprintln!("  ✗ Failed to score set A: {}", e);
-            usb::close(dev);
+            driver::close(dev);
             std::process::exit(1);
         }
     };
@@ -128,7 +128,7 @@ fn main() {
         Ok(s) => s,
         Err(e) => {
             eprintln!("  ✗ Failed to score set B: {}", e);
-            usb::close(dev);
+            driver::close(dev);
             std::process::exit(1);
         }
     };
@@ -137,7 +137,7 @@ fn main() {
         Ok(s) => s,
         Err(e) => {
             eprintln!("  ✗ Failed cross scoring A×B: {}", e);
-            usb::close(dev);
+            driver::close(dev);
             std::process::exit(1);
         }
     };
@@ -170,7 +170,7 @@ fn main() {
     }
 
     println!("\n[5/5] Closing scanner...");
-    usb::close(dev);
+    driver::close(dev);
     println!("  ✓ Done.");
     println!("\n=== Validation complete ===");
 }
@@ -241,7 +241,7 @@ fn match_threshold_from_env() -> f64 {
 }
 
 fn capture_set(
-    dev: &mut usb::FpDevice,
+    dev: &mut driver::FpDevice,
     label: &str,
     count: usize,
     timeout_ms: u32,
@@ -296,8 +296,8 @@ fn capture_set(
     Ok(templates)
 }
 
-fn capture_template(dev: &mut usb::FpDevice, timeout_ms: u32) -> Result<Vec<u8>, String> {
-    let raw_frame = usb::scan(dev, timeout_ms).map_err(|e| format!("scan: {}", e))?;
+fn capture_template(dev: &mut driver::FpDevice, timeout_ms: u32) -> Result<Vec<u8>, String> {
+    let raw_frame = driver::scan(dev, timeout_ms).map_err(|e| format!("scan: {}", e))?;
     let grayscale = image::deframe(&raw_frame).map_err(|e| format!("deframe: {}", e))?;
     biometric::extract(&grayscale).map_err(|e| format!("extract: {}", e))
 }

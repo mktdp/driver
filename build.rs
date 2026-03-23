@@ -37,7 +37,7 @@ fn main() {
 /// `lib → lib64` symlink if needed.
 fn fix_nbis_lib64(crate_dir: &str) {
     // Cargo sets OUT_DIR for *our* crate, e.g.:
-    //   target/debug/build/fingerprint-driver-XXXX/out
+    //   target/debug/build/mktdp-driver-XXXX/out
     // We need to find nbis-rs's output which is a sibling:
     //   target/debug/build/nbis-rs-XXXX/out/build/install_staging/nfiq2/
     let out_dir = match std::env::var("OUT_DIR") {
@@ -48,7 +48,7 @@ fn fix_nbis_lib64(crate_dir: &str) {
     // Walk up from our OUT_DIR to the `build/` directory that contains
     // all crate build dirs.
     let build_parent = Path::new(&out_dir)
-        .parent() // fingerprint-driver-XXXX/
+        .parent() // mktdp-driver-XXXX/
         .and_then(|p| p.parent()); // build/
 
     let build_dir = match build_parent {

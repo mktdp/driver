@@ -67,7 +67,7 @@
 
 ### Milestone 5 — Distribution packaging
 - [x] `cargo build --release` produces optimised `.so`
-- [x] `dist/` directory: `libfingerprint_driver.so`, `fingerprint.h`, `LICENSE`, `README.md`
+- [x] `dist/` directory: `libmktdp_driver.so`, `fingerprint.h`, `LICENSE`, `README.md`
 - [x] Release build size audit (strip debug symbols)
 
 ### Future considerations (out of scope for now)

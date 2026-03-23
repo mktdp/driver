@@ -15,12 +15,12 @@
 
 use std::path::Path;
 
-use fingerprint_driver::{biometric, image, usb};
+use mktdp_driver::{biometric, driver, image};
 
 const DEFAULT_MATCH_THRESHOLD: f64 = 0.06;
 
 fn main() {
-    println!("=== Fingerprint Driver — Hardware Smoke Test ===\n");
+    println!("=== MKTDP Driver — Hardware Smoke Test ===\n");
     let threshold = match_threshold_from_env();
     println!(
         "Match threshold: {:.4} (set FP_MATCH_THRESHOLD to override)\n",
@@ -29,7 +29,7 @@ fn main() {
 
     // ── Step 1: Open device ────────────────────────────────────────
     println!("[1/6] Opening scanner...");
-    let mut dev = match usb::open() {
+    let mut dev = match driver::open() {
         Ok(d) => {
             println!("  ✓ Scanner opened successfully.\n");
             d
@@ -52,7 +52,7 @@ fn main() {
         Ok(t) => t,
         Err(e) => {
             eprintln!("  ✗ First scan failed: {}", e);
-            usb::close(dev);
+            driver::close(dev);
             std::process::exit(1);
         }
     };
@@ -67,7 +67,7 @@ fn main() {
         Ok(t) => t,
         Err(e) => {
             eprintln!("  ✗ Second scan failed: {}", e);
-            usb::close(dev);
+            driver::close(dev);
             std::process::exit(1);
         }
     };
@@ -93,7 +93,7 @@ fn main() {
 
     // ── Step 5: Close ──────────────────────────────────────────────
     println!("\n[5/6] Closing scanner...");
-    usb::close(dev);
+    driver::close(dev);
     println!("  ✓ Done.\n");
 
     println!("[6/6] Summary:");
@@ -104,17 +104,20 @@ fn main() {
 
 /// Capture a raw frame, deframe it, and extract a biometric template.
 /// `label` is used to name the debug PNG saved to ./storage.
-fn scan_and_extract(dev: &mut usb::FpDevice, label: &str) -> std::result::Result<Vec<u8>, String> {
+fn scan_and_extract(
+    dev: &mut driver::FpDevice,
+    label: &str,
+) -> std::result::Result<Vec<u8>, String> {
     // 10 second timeout for finger placement
-    let raw_frame = usb::scan(dev, 10_000).map_err(|e| format!("scan: {}", e))?;
+    let raw_frame = driver::scan(dev, 10_000).map_err(|e| format!("scan: {}", e))?;
     println!("  · Raw frame: {} bytes", raw_frame.len());
 
     let grayscale = image::deframe(&raw_frame).map_err(|e| format!("deframe: {}", e))?;
     println!(
         "  · Deframed image: {} bytes ({}×{})",
         grayscale.len(),
-        usb::IMAGE_WIDTH,
-        usb::IMAGE_HEIGHT
+        driver::IMAGE_WIDTH,
+        driver::IMAGE_HEIGHT
     );
 
     // Save debug PNG to ./storage for visual inspection.
@@ -125,8 +128,8 @@ fn scan_and_extract(dev: &mut usb::FpDevice, label: &str) -> std::result::Result
     let png_path = storage_dir.join(format!("fp_debug_{}.png", label));
     match image::encode_png(
         &grayscale,
-        usb::IMAGE_WIDTH as u32,
-        usb::IMAGE_HEIGHT as u32,
+        driver::IMAGE_WIDTH as u32,
+        driver::IMAGE_HEIGHT as u32,
     ) {
         Ok(png_bytes) => {
             if let Err(e) = std::fs::write(&png_path, &png_bytes) {

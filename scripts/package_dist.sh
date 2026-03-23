@@ -29,13 +29,13 @@ fix_nbis_lib64_symlinks release || true
 
 case "$(uname -s)" in
   Linux*)
-    LIB_NAME="libfingerprint_driver.so"
+    LIB_NAME="libmktdp_driver.so"
     ;;
   Darwin*)
-    LIB_NAME="libfingerprint_driver.dylib"
+    LIB_NAME="libmktdp_driver.dylib"
     ;;
   MINGW*|MSYS*|CYGWIN*)
-    LIB_NAME="fingerprint_driver.dll"
+    LIB_NAME="mktdp_driver.dll"
     ;;
   *)
     echo "unsupported OS: $(uname -s)" >&2

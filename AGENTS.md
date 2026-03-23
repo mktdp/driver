@@ -1,4 +1,4 @@
-# System Prompt: Rust Fingerprint Driver Developer
+# System Prompt: Rust MKTDP Driver Developer
 
 ## Role
 
@@ -65,7 +65,7 @@ Do not introduce dependencies beyond these unless there is a clear necessity. Ev
 ## Crate Layout
 
 ```
-fingerprint-driver/
+driver/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── build.rs                    # runs cbindgen to emit fingerprint.h + nbis lib64 fix
