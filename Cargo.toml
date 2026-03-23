@@ -1,0 +1,23 @@
+[package]
+name = "fingerprint-driver"
+version = "0.1.0"
+edition = "2021"
+description = "Stateless fingerprint driver library for DigitalPersona U.are.U 4500 / compatible scanners"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rusb = "0.9"
+thiserror = "2"
+# nbis-rs provides NIST MINDTCT (minutiae extraction) + BOZORTH3 (matching)
+nbis-rs = { git = "https://github.com/Seventh-Sense-Artificial-Intelligence/nbis-rs", branch = "main" }
+# For encoding raw grayscale pixels to PNG bytes (nbis-rs expects encoded image)
+png = "0.17"
+
+[build-dependencies]
+cbindgen = "0.28"
+
+[features]
+hardware-tests = []

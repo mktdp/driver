@@ -1,0 +1,5 @@
+# /etc/udev/rules.d/70-fingerprint.rules
+# Allow non-root access to DigitalPersona U.are.U 4500 / compatible scanners.
+# After copying this file, reload rules:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTRS{idVendor}=="05ba", ATTRS{idProduct}=="000a", MODE="0660", GROUP="plugdev"
