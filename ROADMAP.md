@@ -70,9 +70,12 @@
 - [x] `dist/` directory: `libmktdp_driver.so`, `fingerprint.h`, `LICENSE`, `README.md`
 - [x] Release build size audit (strip debug symbols)
 
-### Future considerations (out of scope for now)
-- [ ] Windows / macOS build + test
+### Milestone 6
 - [x] CI pipeline (unit tests without hardware, integration tests gated behind `hardware-tests` feature)
+- [x] Windows build + test
+- [ ] macOS build + test
+
+### Future considerations (out of scope for now)
 - [ ] Template format versioning / migration strategy
 - [ ] Benchmark: extraction + matching latency on target hardware
 - [ ] If nbis-rs accuracy is poor, evaluate NBIS via direct C FFI

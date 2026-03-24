@@ -1,9 +1,22 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 #include "../include/fingerprint.h"
+
+static void portable_sleep_seconds(unsigned int seconds) {
+#if defined(_WIN32)
+    Sleep((DWORD)(seconds * 1000U));
+#else
+    sleep(seconds);
+#endif
+}
 
 static double match_threshold_from_env(void) {
     const double default_threshold = 0.06;
@@ -56,7 +69,7 @@ int main(void) {
     printf("  ok template A: %lu bytes\n\n", (unsigned long)len_a);
 
     printf("[3/6] Lift finger, then place the SAME finger again...\n");
-    sleep(2);
+    portable_sleep_seconds(2);
     if (check_rc("second scan", fp_scan_and_extract(dev, 10000, &tmpl_b, &len_b)) != 0) {
         goto cleanup;
     }

@@ -2,3 +2,4 @@
 /storage
 /dist
 /go/fingerprint/*.test
+test.obj

@@ -26,13 +26,25 @@ cargo build --features hardware-tests
 
 echo "[6/7] compile C smoke test..."
 mkdir -p target/debug
-gcc -std=c11 -Wall -Wextra -O2 \
-  -Iinclude \
-  tests/test.c \
-  -Ltarget/debug \
-  -lmktdp_driver \
-  -Wl,-rpath,"$ROOT_DIR/target/debug" \
-  -o target/debug/c_smoke_test_ci
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    gcc -std=c11 -Wall -Wextra -O2 \
+      -Iinclude \
+      tests/test.c \
+      -Ltarget/debug \
+      -lmktdp_driver \
+      -o target/debug/c_smoke_test_ci.exe
+    ;;
+  *)
+    gcc -std=c11 -Wall -Wextra -O2 \
+      -Iinclude \
+      tests/test.c \
+      -Ltarget/debug \
+      -lmktdp_driver \
+      -Wl,-rpath,"$ROOT_DIR/target/debug" \
+      -o target/debug/c_smoke_test_ci
+    ;;
+esac
 
 echo "[7/7] go tests (non-hardware)..."
 (

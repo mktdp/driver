@@ -2,7 +2,9 @@ package fingerprint
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../include
-#cgo LDFLAGS: -L${SRCDIR}/../../target/debug -lmktdp_driver -Wl,-rpath,${SRCDIR}/../../target/debug
+#cgo linux LDFLAGS: -L${SRCDIR}/../../target/debug -lmktdp_driver -Wl,-rpath,${SRCDIR}/../../target/debug
+#cgo darwin LDFLAGS: -L${SRCDIR}/../../target/debug -lmktdp_driver -Wl,-rpath,${SRCDIR}/../../target/debug
+#cgo windows LDFLAGS: -L${SRCDIR}/../../target/debug -lmktdp_driver
 #include "fingerprint.h"
 */
 import "C"

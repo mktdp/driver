@@ -8,6 +8,16 @@ these four flows:
 3. Identification (find best user from many stored templates)
 4. Continuous scanning for attendance/check-in scenarios
 
+## Windows requirement (if running on Windows 11)
+
+Before opening the scanner from this library, bind the USB device to WinUSB
+(VID `05BA`, PID `000A`, for example with Zadig). If the scanner is still
+attached to the default HID stack, `fp_open()` will fail.
+
+For development/tooling on Windows, MSYS2 + MinGW is the most reliable path
+for `nbis-rs`/cgo workflows. MSVC builds are supported in this repo via
+automatic compatibility patching in `build.rs`.
+
 ## Core C API Flows
 
 ### 1) Enrollment (6 scans -> 1 enrollment package)
@@ -42,12 +52,10 @@ What this does internally:
 - Stores all captures inside one opaque enrollment package
 - `fp_verify` compares a live scan against all stored views and uses a median consensus score
 
-What the enrollment package actually is:
-- Yes, it is just a byte array (`uint8_t*` + length).
-- It is not a single merged fingerprint image.
-- It is one container that holds multiple ISO fingerprint templates (one per successful enrollment scan).
-- Current container header uses magic `FPM1` with a version byte, then per-template length + bytes.
-- Treat it as opaque application data: store and send as-is, do not parse or edit it in app code.
+Enrollment package format:
+- It is an opaque byte array (`uint8_t*` + length), not a merged image.
+- It currently stores multiple template entries in one container (`FPM1` header + length-prefixed templates).
+- Treat it as opaque application data in your backend; do not parse or mutate it in app code.
 
 ### 2) Verification
 
@@ -139,8 +147,8 @@ Suggested fields:
 
 ## Optional Go Test Wrapper
 
-`go/fingerprint` exists for integration testing and wrappers. Production logic
-should treat the native C ABI as the source of truth.
+`go/fingerprint` is available for integration testing/wrappers. Keep the C ABI
+as the source of truth for long-term compatibility.
 
 ## Environment Variables
 
