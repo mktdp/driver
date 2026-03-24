@@ -104,8 +104,21 @@ jobs:
 
           $buildRs = Join-Path $nbis.FullName "build.rs"
           $br = Get-Content -Raw $buildRs
+          $updated = $false
+          # Repair older cached patches that accidentally wrote literal PowerShell escape sequences.
+          if ($br.Contains('`r`n')) {
+            $br = $br.Replace('`r`n', "`r`n")
+            $updated = $true
+          }
           if ($br -notmatch "CMAKE_CONFIGURATION_TYPES") {
-            $br = $br -replace '\.define\("CMAKE_BUILD_TYPE", "Release"\)', '.define("CMAKE_BUILD_TYPE", "Release")`r`n        .define("CMAKE_CONFIGURATION_TYPES", "Release")'
+            $needle = '.define("CMAKE_BUILD_TYPE", "Release")'
+            if ($br.Contains($needle)) {
+              $replacement = "$needle`r`n        .define(`"CMAKE_CONFIGURATION_TYPES`", `"Release`")"
+              $br = $br.Replace($needle, $replacement)
+              $updated = $true
+            }
+          }
+          if ($updated) {
             Set-Content -Path $buildRs -Value $br -NoNewline
           }
 
