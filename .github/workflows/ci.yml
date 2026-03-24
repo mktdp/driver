@@ -6,7 +6,13 @@ on:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -21,7 +27,30 @@ jobs:
         with:
           go-version-file: go/fingerprint/go.mod
 
+      - name: Cache cargo (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Cache cargo (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.USERPROFILE }}\.cargo\registry
+            ${{ env.USERPROFILE }}\.cargo\git
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
       - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -30,5 +59,75 @@ jobs:
             pkg-config \
             libusb-1.0-0-dev
 
-      - name: Run non-hardware CI checks
+      - name: Cache vcpkg downloads/binaries (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\downloads
+            C:\vcpkg-bincache
+          key: vcpkg-${{ runner.os }}-libusb-x64-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-libusb-x64-
+
+      - name: Install libusb via vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            git clone --depth 1 https://github.com/microsoft/vcpkg C:\vcpkg
+            cmd.exe /d /c "C:\vcpkg\bootstrap-vcpkg.bat"
+          }
+
+          "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_BINARY_SOURCES=clear;files,C:\vcpkg-bincache,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & "C:\vcpkg\vcpkg.exe" install libusb:x64-windows
+
+      - name: Patch nbis-rs for Windows MSVC build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo fetch
+
+          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+          $checkouts = Join-Path $cargoHome "git\checkouts"
+          $nbis = Get-ChildItem -Path $checkouts -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "nbis-rs-*" } |
+            ForEach-Object { Get-ChildItem -Path $_.FullName -Directory -ErrorAction SilentlyContinue } |
+            Where-Object { Test-Path (Join-Path $_.FullName "build.rs") } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $nbis) {
+            throw "nbis-rs checkout not found under $checkouts (did cargo fetch run?)"
+          }
+
+          $buildRs = Join-Path $nbis.FullName "build.rs"
+          $br = Get-Content -Raw $buildRs
+          if ($br -notmatch "CMAKE_CONFIGURATION_TYPES") {
+            $br = $br -replace '\.define\("CMAKE_BUILD_TYPE", "Release"\)', '.define("CMAKE_BUILD_TYPE", "Release")`r`n        .define("CMAKE_CONFIGURATION_TYPES", "Release")'
+            Set-Content -Path $buildRs -Value $br -NoNewline
+          }
+
+          $superbuild = Join-Path $nbis.FullName "ext\NFIQ2-2.3.0\CMakeLists.txt"
+          if (Test-Path $superbuild) {
+            $sb = Get-Content -Raw $superbuild
+            $safeOsx = 'string(REPLACE ";" "$<SEMICOLON>" EXTERNALPROJECT_SAFE_OSX_ARCHITECTURES "${CMAKE_OSX_ARCHITECTURES}")'
+            $safeCfg = 'string(REPLACE ";" "$<SEMICOLON>" EXTERNALPROJECT_SAFE_CMAKE_CONFIGURATION_TYPES "${CMAKE_CONFIGURATION_TYPES}")'
+            if ($sb.Contains($safeOsx) -and -not $sb.Contains($safeCfg)) {
+              $sb = $sb.Replace($safeOsx, "$safeOsx`r`n$safeCfg")
+            }
+            $sb = $sb.Replace('-DCMAKE_CONFIGURATION_TYPES=${CMAKE_CONFIGURATION_TYPES}', '-DCMAKE_CONFIGURATION_TYPES=${EXTERNALPROJECT_SAFE_CMAKE_CONFIGURATION_TYPES}')
+            Set-Content -Path $superbuild -Value $sb -NoNewline
+          }
+
+      - name: Run non-hardware CI checks (Linux)
+        if: runner.os == 'Linux'
         run: ./scripts/ci_check.sh
+
+      - name: Run non-hardware CI checks (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP "mktdp-target"
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ci_check.ps1
