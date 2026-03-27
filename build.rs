@@ -191,19 +191,25 @@ fn patch_file(path: &Path, patcher: fn(&str) -> String) -> bool {
 fn patch_nbis_build_rs_text(input: &str) -> String {
     let mut out = input.to_string();
 
-    let cfg_release = r#".define("CMAKE_CONFIGURATION_TYPES", "Release")"#;
     let cfg_dual = r#".define("CMAKE_CONFIGURATION_TYPES", "Debug;Release")"#;
-    if out.contains(cfg_release) {
-        out = out.replace(cfg_release, cfg_dual);
+    let cfg_release = r#".define("CMAKE_CONFIGURATION_TYPES", "Release")"#;
+    if out.contains(cfg_dual) {
+        out = out.replace(cfg_dual, cfg_release);
     }
 
     let build_type_define = r#".define("CMAKE_BUILD_TYPE", "Release")"#;
     if !out.contains(r#""CMAKE_CONFIGURATION_TYPES""#) && out.contains(build_type_define) {
         let replacement = format!(
-            "{}\n        .define(\"CMAKE_CONFIGURATION_TYPES\", \"Debug;Release\")",
+            "{}\n        .define(\"CMAKE_CONFIGURATION_TYPES\", \"Release\")",
             build_type_define
         );
         out = out.replacen(build_type_define, &replacement, 1);
+    }
+
+    let build_call = "let dst = cmake.build();";
+    if !out.contains(r#"cmake.profile("Release")"#) && out.contains(build_call) {
+        let replacement = "cmake.profile(\"Release\");\n\n    let dst = cmake.build();";
+        out = out.replacen(build_call, replacement, 1);
     }
 
     let old_link_block = r#"        println!("cargo:rustc-link-search=native=C:/msys64/mingw64/lib");
@@ -219,7 +225,18 @@ fn patch_nbis_build_rs_text(input: &str) -> String {
         println!("cargo:rustc-link-lib=static=stdc++");"#;
     let new_link_block = r#"        // mktdp windows msvc patch: link against NFIQ2 packaged MSVC static libs.
         let profile = env::var("PROFILE").unwrap_or_else(|_| "release".to_string());
-        let opencv_suffix = if profile == "debug" { "d" } else { "" };
+        let staticlib_dir = lib_src_dir.join("staticlib");
+        let has_release = staticlib_dir.join("opencv_imgproc4100.lib").exists();
+        let has_debug = staticlib_dir.join("opencv_imgproc4100d.lib").exists();
+        let opencv_suffix = if has_release {
+            ""
+        } else if has_debug {
+            "d"
+        } else if profile == "debug" {
+            "d"
+        } else {
+            ""
+        };
         println!("cargo:rustc-link-search=native={}/lib", &lib_src_dir_str);
         println!("cargo:rustc-link-search=native={}/staticlib", &lib_src_dir_str);
         println!("cargo:rustc-link-lib=static=opencv_imgproc4100{}", opencv_suffix);

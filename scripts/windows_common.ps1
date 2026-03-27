@@ -141,20 +141,46 @@ function Patch-NbisRsWindowsMsvc {
         $updated = $true
     }
 
-    $cfgRelease = '.define("CMAKE_CONFIGURATION_TYPES", "Release")'
     $cfgDual = '.define("CMAKE_CONFIGURATION_TYPES", "Debug;Release")'
-    if ($br.Contains($cfgRelease)) {
-        $br = $br.Replace($cfgRelease, $cfgDual)
+    $cfgRelease = '.define("CMAKE_CONFIGURATION_TYPES", "Release")'
+    if ($br.Contains($cfgDual)) {
+        $br = $br.Replace($cfgDual, $cfgRelease)
         $updated = $true
     }
 
     if ($br -notmatch "CMAKE_CONFIGURATION_TYPES") {
         $needle = '.define("CMAKE_BUILD_TYPE", "Release")'
         if ($br.Contains($needle)) {
-            $replacement = "$needle`r`n        .define(`"CMAKE_CONFIGURATION_TYPES`", `"Debug;Release`")"
+            $replacement = "$needle`r`n        .define(`"CMAKE_CONFIGURATION_TYPES`", `"Release`")"
             $br = $br.Replace($needle, $replacement)
             $updated = $true
         }
+    }
+
+    $buildCall = 'let dst = cmake.build();'
+    if (-not $br.Contains('cmake.profile("Release")') -and $br.Contains($buildCall)) {
+        $br = $br.Replace($buildCall, "cmake.profile(`"Release`");`r`n`r`n    let dst = cmake.build();")
+        $updated = $true
+    }
+
+    $suffixOld = 'let opencv_suffix = if profile == "debug" { "d" } else { "" };'
+    if ($br.Contains($suffixOld)) {
+        $suffixNew = @'
+        let staticlib_dir = lib_src_dir.join("staticlib");
+        let has_release = staticlib_dir.join("opencv_imgproc4100.lib").exists();
+        let has_debug = staticlib_dir.join("opencv_imgproc4100d.lib").exists();
+        let opencv_suffix = if has_release {
+            ""
+        } else if has_debug {
+            "d"
+        } else if profile == "debug" {
+            "d"
+        } else {
+            ""
+        };
+'@
+        $br = $br.Replace($suffixOld, $suffixNew.TrimEnd())
+        $updated = $true
     }
 
     if ($updated) {
