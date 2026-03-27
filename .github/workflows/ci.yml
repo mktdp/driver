@@ -110,10 +110,16 @@ jobs:
             $br = $br.Replace('`r`n', "`r`n")
             $updated = $true
           }
+          $cfgRelease = '.define("CMAKE_CONFIGURATION_TYPES", "Release")'
+          $cfgDual = '.define("CMAKE_CONFIGURATION_TYPES", "Debug;Release")'
+          if ($br.Contains($cfgRelease)) {
+            $br = $br.Replace($cfgRelease, $cfgDual)
+            $updated = $true
+          }
           if ($br -notmatch "CMAKE_CONFIGURATION_TYPES") {
             $needle = '.define("CMAKE_BUILD_TYPE", "Release")'
             if ($br.Contains($needle)) {
-              $replacement = "$needle`r`n        .define(`"CMAKE_CONFIGURATION_TYPES`", `"Release`")"
+              $replacement = "$needle`r`n        .define(`"CMAKE_CONFIGURATION_TYPES`", `"Debug;Release`")"
               $br = $br.Replace($needle, $replacement)
               $updated = $true
             }
@@ -131,7 +137,17 @@ jobs:
               $sb = $sb.Replace($safeOsx, "$safeOsx`r`n$safeCfg")
             }
             $sb = $sb.Replace('-DCMAKE_CONFIGURATION_TYPES=${CMAKE_CONFIGURATION_TYPES}', '-DCMAKE_CONFIGURATION_TYPES=${EXTERNALPROJECT_SAFE_CMAKE_CONFIGURATION_TYPES}')
+            $sb = $sb.Replace('-DBUILD_WITH_STATIC_CRT=ON', '-DBUILD_WITH_STATIC_CRT=OFF')
+            $sb = $sb.Replace('-DBUILD_WITH_STATIC_CRT=ON)', '-DBUILD_WITH_STATIC_CRT=OFF)')
             Set-Content -Path $superbuild -Value $sb -NoNewline
+          }
+
+          $compiler = Join-Path $nbis.FullName "ext\NFIQ2-2.3.0\cmake\compiler.cmake"
+          if (Test-Path $compiler) {
+            $cc = Get-Content -Raw $compiler
+            $cc = $cc.Replace('string(REGEX REPLACE "/MD" "/MT"', 'string(REGEX REPLACE "/MD" "/MD"')
+            $cc = $cc.Replace('string(REGEX REPLACE "/MDd" "/MTd"', 'string(REGEX REPLACE "/MDd" "/MDd"')
+            Set-Content -Path $compiler -Value $cc -NoNewline
           }
 
       - name: Run non-hardware CI checks (Linux)

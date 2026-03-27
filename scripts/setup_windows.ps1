@@ -56,7 +56,8 @@ else {
 
 Write-Host ""
 Write-Host "[MSVC compatibility note]"
-Write-Host "This repo now patches nbis-rs automatically from build.rs for Windows MSVC builds."
+Write-Host "GitHub Actions patches nbis-rs before cargo build for Windows MSVC runs."
+Write-Host "Local PowerShell scripts in this repo apply the same patch pre-build."
 Write-Host "You can still build with Visual Studio C++ + CMake even without MSYS2."
 
 Write-Host ""

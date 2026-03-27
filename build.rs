@@ -1,7 +1,6 @@
 //! Build script:
-//! 1. Apply deterministic `nbis-rs` Windows compatibility patch (MSVC only).
-//! 2. Fix `nbis-rs` `lib64 -> lib` symlink (Fedora/RHEL/openSUSE 64-bit).
-//! 3. Generate `include/fingerprint.h` via cbindgen.
+//! 1. Fix `nbis-rs` `lib64 -> lib` symlink (Fedora/RHEL/openSUSE 64-bit).
+//! 2. Generate `include/fingerprint.h` via cbindgen.
 
 use std::{
     env, fs,
@@ -13,7 +12,12 @@ fn main() {
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let target = env::var("TARGET").unwrap_or_default();
 
-    if target.contains("windows-msvc") {
+    // NOTE: keep this off by default. This build script runs after dependency
+    // build scripts, so mutating `nbis-rs` here is too late for the current build
+    // and can taint cached cargo checkouts for later builds.
+    if target.contains("windows-msvc")
+        && env::var_os("MKTDP_ENABLE_NBIS_PATCH_FROM_BUILD_RS").is_some()
+    {
         patch_nbis_windows_msvc();
     }
 
@@ -187,10 +191,16 @@ fn patch_file(path: &Path, patcher: fn(&str) -> String) -> bool {
 fn patch_nbis_build_rs_text(input: &str) -> String {
     let mut out = input.to_string();
 
+    let cfg_release = r#".define("CMAKE_CONFIGURATION_TYPES", "Release")"#;
+    let cfg_dual = r#".define("CMAKE_CONFIGURATION_TYPES", "Debug;Release")"#;
+    if out.contains(cfg_release) {
+        out = out.replace(cfg_release, cfg_dual);
+    }
+
     let build_type_define = r#".define("CMAKE_BUILD_TYPE", "Release")"#;
     if !out.contains(r#""CMAKE_CONFIGURATION_TYPES""#) && out.contains(build_type_define) {
         let replacement = format!(
-            "{}\n        .define(\"CMAKE_CONFIGURATION_TYPES\", \"Release\")",
+            "{}\n        .define(\"CMAKE_CONFIGURATION_TYPES\", \"Debug;Release\")",
             build_type_define
         );
         out = out.replacen(build_type_define, &replacement, 1);

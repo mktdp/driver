@@ -103,7 +103,86 @@ function Initialize-WindowsCompatHeaders {
 }
 
 function Patch-NbisRsWindowsMsvc {
-    Write-Host "nbis-rs patching is handled by build.rs during cargo builds."
+    param(
+        [string]$CargoPath
+    )
+
+    if ($env:OS -ne "Windows_NT") {
+        return
+    }
+
+    if (-not $CargoPath) {
+        $CargoPath = Resolve-Cargo
+    }
+
+    & $CargoPath fetch
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo fetch failed with exit code $LASTEXITCODE."
+    }
+
+    $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+    $checkouts = Join-Path $cargoHome "git\checkouts"
+    $nbis = Get-ChildItem -Path $checkouts -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "nbis-rs-*" } |
+        ForEach-Object { Get-ChildItem -Path $_.FullName -Directory -ErrorAction SilentlyContinue } |
+        Where-Object { Test-Path (Join-Path $_.FullName "build.rs") } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if (-not $nbis) {
+        throw "nbis-rs checkout not found under $checkouts (did cargo fetch run?)"
+    }
+
+    $buildRs = Join-Path $nbis.FullName "build.rs"
+    $br = Get-Content -Raw $buildRs
+    $updated = $false
+    if ($br.Contains('`r`n')) {
+        $br = $br.Replace('`r`n', "`r`n")
+        $updated = $true
+    }
+
+    $cfgRelease = '.define("CMAKE_CONFIGURATION_TYPES", "Release")'
+    $cfgDual = '.define("CMAKE_CONFIGURATION_TYPES", "Debug;Release")'
+    if ($br.Contains($cfgRelease)) {
+        $br = $br.Replace($cfgRelease, $cfgDual)
+        $updated = $true
+    }
+
+    if ($br -notmatch "CMAKE_CONFIGURATION_TYPES") {
+        $needle = '.define("CMAKE_BUILD_TYPE", "Release")'
+        if ($br.Contains($needle)) {
+            $replacement = "$needle`r`n        .define(`"CMAKE_CONFIGURATION_TYPES`", `"Debug;Release`")"
+            $br = $br.Replace($needle, $replacement)
+            $updated = $true
+        }
+    }
+
+    if ($updated) {
+        Set-Content -Path $buildRs -Value $br -NoNewline
+    }
+
+    $superbuild = Join-Path $nbis.FullName "ext\NFIQ2-2.3.0\CMakeLists.txt"
+    if (Test-Path $superbuild) {
+        $sb = Get-Content -Raw $superbuild
+        $safeOsx = 'string(REPLACE ";" "$<SEMICOLON>" EXTERNALPROJECT_SAFE_OSX_ARCHITECTURES "${CMAKE_OSX_ARCHITECTURES}")'
+        $safeCfg = 'string(REPLACE ";" "$<SEMICOLON>" EXTERNALPROJECT_SAFE_CMAKE_CONFIGURATION_TYPES "${CMAKE_CONFIGURATION_TYPES}")'
+        if ($sb.Contains($safeOsx) -and -not $sb.Contains($safeCfg)) {
+            $sb = $sb.Replace($safeOsx, "$safeOsx`r`n$safeCfg")
+        }
+        $sb = $sb.Replace('-DCMAKE_CONFIGURATION_TYPES=${CMAKE_CONFIGURATION_TYPES}', '-DCMAKE_CONFIGURATION_TYPES=${EXTERNALPROJECT_SAFE_CMAKE_CONFIGURATION_TYPES}')
+        $sb = $sb.Replace('-DBUILD_WITH_STATIC_CRT=ON', '-DBUILD_WITH_STATIC_CRT=OFF')
+        Set-Content -Path $superbuild -Value $sb -NoNewline
+    }
+
+    $compiler = Join-Path $nbis.FullName "ext\NFIQ2-2.3.0\cmake\compiler.cmake"
+    if (Test-Path $compiler) {
+        $cc = Get-Content -Raw $compiler
+        $cc = $cc.Replace('string(REGEX REPLACE "/MD" "/MT"', 'string(REGEX REPLACE "/MD" "/MD"')
+        $cc = $cc.Replace('string(REGEX REPLACE "/MDd" "/MTd"', 'string(REGEX REPLACE "/MDd" "/MDd"')
+        Set-Content -Path $compiler -Value $cc -NoNewline
+    }
+
+    Write-Host "Applied nbis-rs Windows MSVC patch at: $($nbis.FullName)"
 }
 
 function Get-CargoTargetRoot {

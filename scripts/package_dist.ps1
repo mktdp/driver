@@ -78,6 +78,7 @@ if (-not $CargoExe) {
 $cmakeExe = Resolve-CMake
 $targetRoot = Initialize-CargoTargetDir -RepoRoot $repoRoot
 Initialize-WindowsCompatHeaders -RepoRoot $repoRoot
+Patch-NbisRsWindowsMsvc -CargoPath $CargoExe
 Write-Host "Using CARGO_TARGET_DIR: $targetRoot"
 Write-Host "Using CMake: $cmakeExe"
 
